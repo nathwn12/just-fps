@@ -103,12 +103,12 @@ struct OverlayConfig {
     bool showFPS  = true;
     bool showCPU  = true;
     bool showGPU  = true;
-    bool showGpuHotspot = false;
-    bool showVRAM = true;     // GPU VRAM usage
-    bool showRAM  = true;
-    bool horizontal = false;  // horizontal compact view
+    bool showGpuHotspot = true;
+    bool showVRAM = false;     // GPU VRAM usage
+    bool showRAM  = false;
+    bool horizontal = true;  // horizontal compact view
     bool useFahrenheit = false; // false = Celsius, true = Fahrenheit
-    bool autoStart = false;   // skip config window and start overlay immediately
+    bool autoStart = true;   // skip config window and start overlay immediately
     int  position = 4;        // 0=TL 1=TR 2=BL 3=BR 4=TC 5=BC
     int  opacity  = 100;      // 30..100 %
     float uiScale = 2.0f;     // overlay UI scale
@@ -205,14 +205,11 @@ static void LoadConfig(OverlayConfig& cfg)
     cfg.showFPS       = ReadIniInt("Display", "showFPS", 1) != 0;
     cfg.showCPU       = ReadIniInt("Display", "showCPU", 1) != 0;
     cfg.showGPU       = ReadIniInt("Display", "showGPU", 1) != 0;
-    cfg.showGpuHotspot = ReadIniInt("Display", "showGpuHotspot", 0) != 0;
-    cfg.showVRAM      = ReadIniInt("Display", "showVRAM", 1) != 0;
-    cfg.showRAM       = ReadIniInt("Display", "showRAM", 1) != 0;
-    
-    // Layout settings
-    cfg.horizontal    = ReadIniInt("Layout", "horizontal", 0) != 0;
-    cfg.useFahrenheit = ReadIniInt("Layout", "useFahrenheit", 0) != 0;
-    cfg.autoStart     = ReadIniInt("Layout", "autoStart", 0) != 0;
+    cfg.showGpuHotspot = ReadIniInt("Display", "showGpuHotspot", 1) != 0;
+    cfg.showVRAM      = ReadIniInt("Display", "showVRAM", 0) != 0;
+    cfg.showRAM       = ReadIniInt("Display", "showRAM", 0) != 0;
+    cfg.horizontal    = ReadIniInt("Layout", "horizontal", 1) != 0;
+    cfg.autoStart     = ReadIniInt("Layout", "autoStart", 1) != 0;
     cfg.position      = ReadIniInt("Layout", "position", 4);
     cfg.opacity       = ReadIniInt("Layout", "opacity", 100);
     cfg.uiScale       = ReadIniFloat("Layout", "uiScale", 2.0f);
@@ -310,7 +307,6 @@ static AppMode       g_Mode       = MODE_CONFIG;
 static PendingCmd    g_Pending    = CMD_NONE;
 static bool          g_Running    = true;
 static bool          g_OvlVisible = true;
-static bool          g_returnToOverlay = false;
 
 static HINSTANCE      g_hInstance = nullptr;
 static HWND           g_hwnd     = nullptr;
@@ -1510,7 +1506,6 @@ void SwitchToOverlay()
 
     g_Mode       = MODE_OVERLAY;
     g_OvlVisible = true;
-    g_returnToOverlay = false;
 }
 
 void SwitchToConfig()
@@ -1684,7 +1679,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
         if (!g_Running) break;
 
         if (g_Pending == CMD_START_OVERLAY) { g_Pending = CMD_NONE; SwitchToOverlay(); }
-        if (g_Pending == CMD_SHOW_SETTINGS) { g_Pending = CMD_NONE; g_returnToOverlay = true; SwitchToConfig();  }
+        if (g_Pending == CMD_SHOW_SETTINGS) { g_Pending = CMD_NONE; SwitchToConfig(); }
         if (g_Pending == CMD_EXIT)          { g_Running = false; break; }
 
         // ══════════════════════════════════════════════════════════════
@@ -1903,6 +1898,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
             ImGui::Spacing(); ImGui::Spacing(); ImGui::Spacing();
             if (ImGui::Button("Apply Settings", ImVec2(ImGui::GetContentRegionAvail().x, 42)))
                 SaveConfig(g_Config);
+            ImGui::Spacing();
+            if (ImGui::Button("Start Overlay", ImVec2(ImGui::GetContentRegionAvail().x, 42)))
+                { SaveConfig(g_Config); g_Pending = CMD_START_OVERLAY; }
             ImGui::Spacing();
             ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(.60f,.12f,.12f,1));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered,  ImVec4(.72f,.16f,.16f,1));
@@ -2370,13 +2368,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
     switch (msg)
     {
     case WM_CLOSE:
-        if (g_Mode == MODE_CONFIG) {
+        if (g_Mode == MODE_CONFIG)
             SaveConfig(g_Config);
-            if (g_returnToOverlay)
-                g_Pending = CMD_START_OVERLAY;
-            else
-                g_Running = false;
-        }
+        g_Running = false;
         return 0;
     case WM_DESTROY:
         return 0;

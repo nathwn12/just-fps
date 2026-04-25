@@ -102,3 +102,4 @@ $RECYCLE.BIN/
 *.mjs
 AGENTS.md
 *.zip
+*.ps1
