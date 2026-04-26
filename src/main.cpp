@@ -55,7 +55,7 @@
 #define IDM_UPDATE    1005
 
 // Current version
-#define APP_VERSION "v1.0.1"
+#define APP_VERSION "v1.0.2"
 
 // PawnIO installer resource ID (embedded executable)
 #define IDR_PAWNIO_SETUP 101
@@ -72,6 +72,12 @@
 #ifndef TRACE_LEVEL_INFORMATION
 #define TRACE_LEVEL_INFORMATION 4
 #endif
+
+// Modifier flags for hotkey bindings
+#define HMOD_NONE  0
+#define HMOD_CTRL  1
+#define HMOD_ALT   2
+#define HMOD_SHIFT 4
 
 // Microsoft-Windows-DXGI provider  {CA11C036-0102-4A2D-A6AD-F03CFED5D3C9}
 static const GUID DXGI_PROVIDER =
@@ -112,9 +118,11 @@ struct OverlayConfig {
     int  position = 4;        // 0=TL 1=TR 2=BL 3=BR 4=TC 5=BC
     int  opacity  = 100;      // 30..100 %
     float uiScale = 1.0f;     // overlay UI scale (1.0 = default)
-    int  toggleKey = VK_OEM_2;
-    int  exitKey   = VK_MULTIPLY;
-    int  selectedGpu = 0;     // selected GPU index (0 = first GPU)
+    int  toggleKey    = VK_OEM_2;
+    int  settingsKey  = VK_MULTIPLY;
+    int  toggleMod    = HMOD_CTRL;   // modifier flags for toggle key
+    int  settingsMod  = HMOD_CTRL;   // modifier flags for settings key
+    int  selectedGpu  = 0;     // selected GPU index (0 = first GPU)
 };
 
 
@@ -215,7 +223,9 @@ static void LoadConfig(OverlayConfig& cfg)
 
     // Hotkeys
     cfg.toggleKey     = ReadIniInt("Hotkeys", "toggleKey", VK_OEM_2);
-    cfg.exitKey       = ReadIniInt("Hotkeys", "exitKey", VK_MULTIPLY);
+    cfg.settingsKey   = ReadIniInt("Hotkeys", "exitKey", VK_MULTIPLY);
+    cfg.toggleMod     = ReadIniInt("Hotkeys", "toggleMod", HMOD_CTRL);
+    cfg.settingsMod   = ReadIniInt("Hotkeys", "settingsMod", HMOD_CTRL);
     
     // GPU selection
     cfg.selectedGpu   = ReadIniInt("GPU", "selectedGpu", 0);
@@ -288,10 +298,43 @@ static void SaveConfig(const OverlayConfig& cfg)
 
     // Hotkeys
     WriteIniInt("Hotkeys", "toggleKey", cfg.toggleKey);
-    WriteIniInt("Hotkeys", "exitKey", cfg.exitKey);
+    WriteIniInt("Hotkeys", "exitKey", cfg.settingsKey);
+    WriteIniInt("Hotkeys", "toggleMod", cfg.toggleMod);
+    WriteIniInt("Hotkeys", "settingsMod", cfg.settingsMod);
     
     // GPU selection
     WriteIniInt("GPU", "selectedGpu", cfg.selectedGpu);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Hotkey helpers
+// ═══════════════════════════════════════════════════════════════════════════
+static bool ModsDown(int modFlags)
+{
+    if ((modFlags & HMOD_CTRL)  && !(GetAsyncKeyState(VK_CONTROL) & 0x8000)) return false;
+    if ((modFlags & HMOD_ALT)   && !(GetAsyncKeyState(VK_MENU)   & 0x8000)) return false;
+    if ((modFlags & HMOD_SHIFT) && !(GetAsyncKeyState(VK_SHIFT)  & 0x8000)) return false;
+    return true;
+}
+
+static int HeldMods()
+{
+    int m = 0;
+    if (GetAsyncKeyState(VK_CONTROL) & 0x8000) m |= HMOD_CTRL;
+    if (GetAsyncKeyState(VK_MENU)   & 0x8000) m |= HMOD_ALT;
+    if (GetAsyncKeyState(VK_SHIFT)  & 0x8000) m |= HMOD_SHIFT;
+    return m;
+}
+
+static const char* GetKeyName(int vk);
+
+static void FormatKeyBinding(char* buf, int bufSize, int vk, int mod)
+{
+    buf[0] = '\0';
+    if (mod & HMOD_CTRL)  { strcat_s(buf, bufSize, "Ctrl+"); }
+    if (mod & HMOD_ALT)   { strcat_s(buf, bufSize, "Alt+"); }
+    if (mod & HMOD_SHIFT) { strcat_s(buf, bufSize, "Shift+"); }
+    strcat_s(buf, bufSize, GetKeyName(vk));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -443,7 +486,7 @@ static IDXGISwapChain*         g_pSwapChain        = nullptr;
 static ID3D11RenderTargetView* g_pRenderTargetView = nullptr;
 
 // ── Hotkey listener state ──
-static int  g_listeningFor = 0;   // 0=none, 1=toggle, 2=exit
+static int  g_listeningFor = 0;   // 0=none, 1=toggle, 2=settings
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Forward declarations
@@ -1715,8 +1758,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
                         if (vk == VK_MENU || vk == VK_LMENU || vk == VK_RMENU) continue;  // Alt keys
                         
                         if (GetAsyncKeyState(vk) & 1) {
-                            if (g_listeningFor == 1) g_Config.toggleKey = vk;
-                            if (g_listeningFor == 2) g_Config.exitKey   = vk;
+                            int mod = HeldMods();
+                            if (g_listeningFor == 1) { g_Config.toggleKey = vk; g_Config.toggleMod = mod; }
+                            if (g_listeningFor == 2) { g_Config.settingsKey = vk; g_Config.settingsMod = mod; }
                             g_listeningFor = 0;
                             break;
                         }
@@ -1873,20 +1917,24 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
                 ImGui::SameLine();
                 if (ImGui::SmallButton("Cancel##1")) g_listeningFor = 0;
             } else {
-                ImGui::Text("%-12s", GetKeyName(g_Config.toggleKey));
+                char buf[64];
+                FormatKeyBinding(buf, sizeof(buf), g_Config.toggleKey, g_Config.toggleMod);
+                ImGui::Text("%s", buf);
                 ImGui::SameLine();
                 if (ImGui::SmallButton("Change##1")) g_listeningFor = 1;
             }
 
-            // Exit key
-            ImGui::Text("Exit:");
+            // Settings key
+            ImGui::Text("Settings:");
             ImGui::SameLine(90);
             if (g_listeningFor == 2) {
                 ImGui::TextColored(ImVec4(1,.8f,.2f,1), "Press any key...  ");
                 ImGui::SameLine();
                 if (ImGui::SmallButton("Cancel##2")) g_listeningFor = 0;
             } else {
-                ImGui::Text("%-12s", GetKeyName(g_Config.exitKey));
+                char buf[64];
+                FormatKeyBinding(buf, sizeof(buf), g_Config.settingsKey, g_Config.settingsMod);
+                ImGui::Text("%s", buf);
                 ImGui::SameLine();
                 if (ImGui::SmallButton("Change##2")) g_listeningFor = 2;
             }
@@ -1932,10 +1980,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
         else
         {
             // ── Hotkeys (user-configurable) ──
-            if (GetAsyncKeyState(g_Config.toggleKey) & 1)
-                g_OvlVisible = !g_OvlVisible;
-            if (GetAsyncKeyState(g_Config.exitKey) & 1)
-                { g_Running = false; break; }
+            for (int vk = 1; vk < 256; vk++) {
+                if (!(GetAsyncKeyState(vk) & 1)) continue;
+                if (vk == g_Config.toggleKey   && ModsDown(g_Config.toggleMod))
+                    { g_OvlVisible = !g_OvlVisible; break; }
+                if (vk == g_Config.settingsKey && ModsDown(g_Config.settingsMod))
+                    { g_Pending = CMD_SHOW_SETTINGS; break; }
+            }
 
             // ── Show/Hide window based on visibility flag ──
             static bool wasVisible = true;
