@@ -13,20 +13,18 @@ A stripped-down FPS overlay for Windows. Shows the stats you actually want while
 ## Features
 
 - **FPS** — Real framerate from Windows ETW (works with D3D9-12, OpenGL, Vulkan)
-- **GPU** — Utilization and temp (NVIDIA, AMD, Intel via LibreHardwareMonitor)
-- **GPU Hotspot Temperature** — Core hotspot readings when available
+- **GPU** — Utilization, temperature, and hotspot readings (NVIDIA, AMD, Intel via LibreHardwareMonitor)
 - **Multi-GPU** — Detects all adapters, pick which one to watch
-- **VRAM** — Usage percentage and GB total
-- **CPU** — Utilization and temp
-- **RAM** — Percentage and used/total
-- **Temperature Units** — Celsius or Fahrenheit
+- **CPU** — Utilization and temperature
 - **Active Process** — Shows what game or app is being tracked
 - **Horizontal or Vertical Layout** — Pick your orientation
-- **Persistent Settings** — Everything saves automatically
-- **Click-through** — Never steals input from your game
-- **Custom Hotkeys** — Toggle and exit bound to whatever keys you want
+- **Temperature Units** — Celsius or Fahrenheit
+- **Custom Hotkeys** — Toggle and settings keys with Ctrl/Alt/Shift modifiers
+- **Auto-start Overlay** — Skips config and launches overlay immediately
 - **System Tray** — Lives quietly in the background
 - **Preset Positions** — Snap to top/bottom left, center, or right
+- **Persistent Settings** — Everything saves to config.ini automatically
+- **Click-through** — Never steals input from your game
 - **Lightweight** — No installer, no services, no junk
 
 ## Screenshot
