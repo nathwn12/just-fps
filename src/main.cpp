@@ -23,6 +23,7 @@
 #include <comdef.h>
 #include <winhttp.h>
 #include <chrono>
+#include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <cmath>
@@ -54,7 +55,7 @@
 #define IDM_UPDATE    1005
 
 // Current version
-#define APP_VERSION "v1.0.0-beta"
+#define APP_VERSION "v1.0.1"
 
 // PawnIO installer resource ID (embedded executable)
 #define IDR_PAWNIO_SETUP 101
@@ -106,12 +107,11 @@ struct OverlayConfig {
     bool showGpuHotspot = true;
     bool showVRAM = false;     // GPU VRAM usage
     bool showRAM  = false;
-    bool horizontal = true;  // horizontal compact view
     bool useFahrenheit = false; // false = Celsius, true = Fahrenheit
     bool autoStart = true;   // skip config window and start overlay immediately
     int  position = 4;        // 0=TL 1=TR 2=BL 3=BR 4=TC 5=BC
     int  opacity  = 100;      // 30..100 %
-    float uiScale = 2.0f;     // overlay UI scale
+    float uiScale = 1.0f;     // overlay UI scale (1.0 = default)
     int  toggleKey = VK_OEM_2;
     int  exitKey   = VK_MULTIPLY;
     int  selectedGpu = 0;     // selected GPU index (0 = first GPU)
@@ -208,11 +208,10 @@ static void LoadConfig(OverlayConfig& cfg)
     cfg.showGpuHotspot = ReadIniInt("Display", "showGpuHotspot", 1) != 0;
     cfg.showVRAM      = ReadIniInt("Display", "showVRAM", 0) != 0;
     cfg.showRAM       = ReadIniInt("Display", "showRAM", 0) != 0;
-    cfg.horizontal    = ReadIniInt("Layout", "horizontal", 1) != 0;
     cfg.autoStart     = ReadIniInt("Layout", "autoStart", 1) != 0;
     cfg.position      = ReadIniInt("Layout", "position", 4);
     cfg.opacity       = ReadIniInt("Layout", "opacity", 100);
-    cfg.uiScale       = ReadIniFloat("Layout", "uiScale", 2.0f);
+    cfg.uiScale       = ReadIniFloat("Layout", "uiScale", 1.0f);
 
     // Hotkeys
     cfg.toggleKey     = ReadIniInt("Hotkeys", "toggleKey", VK_OEM_2);
@@ -225,8 +224,8 @@ static void LoadConfig(OverlayConfig& cfg)
     if (cfg.position < 0 || cfg.position > 5) cfg.position = 4;
     if (cfg.opacity < 30) cfg.opacity = 30;
     if (cfg.opacity > 100) cfg.opacity = 100;
-    if (cfg.uiScale < 0.75f) cfg.uiScale = 0.75f;
-    if (cfg.uiScale > 2.00f) cfg.uiScale = 2.00f;
+    if (cfg.uiScale < 0.50f) cfg.uiScale = 0.50f;
+    if (cfg.uiScale > 1.50f) cfg.uiScale = 1.50f;
     if (cfg.selectedGpu < 0) cfg.selectedGpu = 0;
 }
 
@@ -281,7 +280,6 @@ static void SaveConfig(const OverlayConfig& cfg)
     WriteIniInt("Display", "showRAM", cfg.showRAM ? 1 : 0);
     
     // Layout settings
-    WriteIniInt("Layout", "horizontal", cfg.horizontal ? 1 : 0);
     WriteIniInt("Layout", "useFahrenheit", cfg.useFahrenheit ? 1 : 0);
     WriteIniInt("Layout", "autoStart", cfg.autoStart ? 1 : 0);
     WriteIniInt("Layout", "position", cfg.position);
@@ -313,6 +311,9 @@ static HWND           g_hwnd     = nullptr;
 static HANDLE         g_singleInstanceMutex = nullptr;
 static NOTIFYICONDATA g_nid      = {};
 static RECT           g_overlayBounds = {0, 0, 0, 0};  // ImGui overlay bounds for hit-testing
+static ImFont*        g_baseFont = nullptr;
+static ImFont*        g_overlayValueFont = nullptr;
+static ImFont*        g_overlayLabelFont = nullptr;
 
 // ── Hardware info ──
 static char g_cpuName[256] = "Unknown";
@@ -1649,8 +1650,19 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr; io.LogFilename = nullptr;
 
-    ImFont* font = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 17.0f);
-    if (!font) { io.Fonts->Clear(); ImFontConfig fc; fc.SizePixels = 16; io.Fonts->AddFontDefault(&fc); }
+    g_baseFont = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 22.0f);
+    g_overlayValueFont = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\seguisb.ttf", 22.0f);
+    g_overlayLabelFont = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeuib.ttf", 22.0f);
+    if (!g_baseFont) {
+        io.Fonts->Clear();
+        ImFontConfig fc;
+        fc.SizePixels = 20;
+        g_baseFont = io.Fonts->AddFontDefault(&fc);
+        g_overlayValueFont = nullptr;
+        g_overlayLabelFont = nullptr;
+    }
+    if (!g_overlayValueFont) g_overlayValueFont = g_baseFont;
+    if (!g_overlayLabelFont) g_overlayLabelFont = g_overlayValueFont;
 
     ApplyStyle();
     ImGui_ImplWin32_Init(g_hwnd);
@@ -1660,6 +1672,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
     using Clock = std::chrono::high_resolution_clock;
     auto lastCpuTime = Clock::now();
     auto lastGpuTime = lastCpuTime;
+    auto lastRamTime = lastCpuTime;
     float cpuUsage = 0;
     GetCpuUsage(); // seed
 
@@ -1825,11 +1838,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
             ImGui::Spacing(); ImGui::Spacing();
             ImGui::TextColored(ImVec4(.55f,.70f,.95f,1), "LAYOUT");
             ImGui::Spacing();
-            ImGui::Checkbox("  Horizontal Compact View", &g_Config.horizontal);
-            ImGui::Spacing();
             ImGui::TextColored(ImVec4(.45f,.45f,.50f,1), "Overlay UI Size");
             ImGui::SetNextItemWidth(-1);
-            ImGui::SliderFloat("##uiscale", &g_Config.uiScale, 0.75f, 2.00f, "%.2fx");
+            ImGui::SliderFloat("##uiscale", &g_Config.uiScale, 0.50f, 1.50f, "%.2fx");
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Scales only the in-game overlay");
             
@@ -2000,11 +2011,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
                     }
                 }
 
-                // ── RAM ──
-                MEMORYSTATUSEX mem = {}; mem.dwLength = sizeof(mem);
-                GlobalMemoryStatusEx(&mem);
-                cachedRamUsed  = (float)(mem.ullTotalPhys - mem.ullAvailPhys) / (1024.f*1024.f*1024.f);
-                cachedRamTotal = (float)(mem.ullTotalPhys)                    / (1024.f*1024.f*1024.f);
+                float ramElapsed = std::chrono::duration<float>(now - lastRamTime).count();
+                if (ramElapsed >= 1.0f) {
+                    MEMORYSTATUSEX mem = {}; mem.dwLength = sizeof(mem);
+                    GlobalMemoryStatusEx(&mem);
+                    cachedRamUsed  = (float)(mem.ullTotalPhys - mem.ullAvailPhys) / (1024.f*1024.f*1024.f);
+                    cachedRamTotal = (float)(mem.ullTotalPhys)                    / (1024.f*1024.f*1024.f);
+                    lastRamTime = now;
+                }
             }
             
             // Use cached values
@@ -2115,9 +2129,21 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
             ImGui::Begin("##ovl", nullptr, wf);
             ImGui::SetWindowFontScale(g_Config.uiScale);
 
-            const ImVec4 textCol = ImVec4(.93f, .93f, .93f, 1.0f);
-            const ImVec4 dimCol = ImVec4(.65f, .65f, .68f, 1.0f);
-            const ImVec4 sepCol = ImVec4(.55f, .55f, .58f, 1.0f);
+            // Steam-like colors: muted colored labels, soft gray values.
+            const ImVec4 fpsCol(0.93f, 0.50f, 0.50f, 1.0f);   // Salmon
+            const ImVec4 cpuCol(0.84f, 0.88f, 0.33f, 1.0f);   // Yellow-green
+            const ImVec4 gpuCol(0.20f, 0.76f, 0.28f, 1.0f);   // Steam green
+            const ImVec4 memCol(0.78f, 0.55f, 0.96f, 1.0f);   // Lavender
+            const ImVec4 valCol(0.80f, 0.80f, 0.82f, 1.0f);   // Values
+            const ImVec4 dimCol(0.45f, 0.45f, 0.48f, 1.0f);   // Unavailable
+            auto TextColoredFont = [](ImFont* font, const ImVec4& color, const char* fmt, ...) {
+                if (font) ImGui::PushFont(font);
+                va_list args;
+                va_start(args, fmt);
+                ImGui::TextColoredV(color, fmt, args);
+                va_end(args);
+                if (font) ImGui::PopFont();
+            };
             
             // ── Draw glowing border when CTRL is held ──
             if (ctrlHeld) {
@@ -2142,149 +2168,83 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
             }
 
             // ═══════════════════════════════════════════════════════════
-            // HORIZONTAL COMPACT VIEW
+            // STATS (Steam-style horizontal)
             // ═══════════════════════════════════════════════════════════
-            if (g_Config.horizontal) {
-                bool needSep = false;
-                
-                // FPS
-                if (g_Config.showFPS) {
-                    if (g_etwAvailable && gameFps > 0) {
-                        ImGui::TextColored(textCol, "FPS %.0f", gameFps);
-                    } else {
-                        ImGui::TextColored(dimCol, "FPS ---");
-                    }
-                    needSep = true;
-                }
-                
-                // CPU
-                if (g_Config.showCPU) {
-                    if (needSep) { ImGui::SameLine(); ImGui::TextColored(sepCol, " | "); ImGui::SameLine(); }
-                    ImGui::TextColored(textCol, "CPU %.0f%%", cpuUsage);
-                    if (g_cpuTempAvailable && g_cpuTemp > 0) {
-                        ImGui::SameLine(0, 2);
-                        float dispTemp = ToDisplayTemp(g_cpuTemp, g_Config.useFahrenheit);
-                        ImGui::TextColored(textCol, " %.0f\xC2\xB0%s", dispTemp, g_Config.useFahrenheit ? "F" : "C");
-                    }
-                    needSep = true;
-                }
-                
-                // GPU stats via LHWM
-                if (g_Config.showGPU) {
-                    if (needSep) { ImGui::SameLine(); ImGui::TextColored(sepCol, " | "); ImGui::SameLine(); }
-                    
-                    float dispGpuLoad = g_gpuUsage;
-                    float dispGpuTemp = g_gpuTemp;
-                    bool hasGpuData = g_lhwmAvailable && g_gpuCount > 0;
-                    
-                    if (hasGpuData) {
-                        ImGui::TextColored(textCol, "GPU %.0f%%", dispGpuLoad);
-                        if (dispGpuTemp > 0) {
-                            ImGui::SameLine(0, 2);
-                            float dispTemp = ToDisplayTemp(dispGpuTemp, g_Config.useFahrenheit);
-                            ImGui::TextColored(textCol, " %.0f\xC2\xB0%s", dispTemp, g_Config.useFahrenheit ? "F" : "C");
-                        }
-                        if (g_Config.showGpuHotspot && !g_lhwmGpuHotspotPath.empty() && g_gpuHotspotTemp > 0) {
-                            ImGui::SameLine(0, 6);
-                            float dispHotspot = ToDisplayTemp(g_gpuHotspotTemp, g_Config.useFahrenheit);
-                            ImGui::TextColored(textCol, "HS %.0f\xC2\xB0%s", dispHotspot, g_Config.useFahrenheit ? "F" : "C");
-                        }
-                    } else {
-                        ImGui::TextColored(dimCol, "GPU N/A");
-                    }
-                    needSep = true;
-                }
-                
-                // VRAM
-                if (g_Config.showVRAM) {
-                    float dispVramUsed = g_vramUsed;
-                    float dispVramTotal = g_vramTotal;
-                    if (dispVramTotal > 0) {
-                        if (needSep) { ImGui::SameLine(); ImGui::TextColored(sepCol, " | "); ImGui::SameLine(); }
-                        float vramPct = (dispVramUsed / dispVramTotal) * 100.0f;
-                        ImGui::TextColored(textCol, "VRAM %.0f%% %.1f/%.0fG", vramPct, dispVramUsed, dispVramTotal);
-                        needSep = true;
-                    }
-                }
-                
-                // RAM
-                if (g_Config.showRAM) {
-                    if (needSep) { ImGui::SameLine(); ImGui::TextColored(sepCol, " | "); ImGui::SameLine(); }
-                    float pct = (ramUsed / ramTotal) * 100;
-                    ImGui::TextColored(textCol, "RAM %.0f%% %.1f/%.0fG", pct, ramUsed, ramTotal);
-                }
-            }
-            // ═══════════════════════════════════════════════════════════
-            // VERTICAL VIEW (default)
-            // ═══════════════════════════════════════════════════════════
-            else {
+            {
                 bool needSep = false;
 
                 // FPS
                 if (g_Config.showFPS) {
+                    if (needSep) ImGui::SameLine(0, 10);
                     if (g_etwAvailable && gameFps > 0) {
-                        ImGui::TextColored(textCol, "FPS  %.0f", gameFps);
+                        TextColoredFont(g_overlayLabelFont, fpsCol, "FPS");
+                        ImGui::SameLine(0, 4);
+                        TextColoredFont(g_overlayValueFont, valCol, "%.0f", gameFps);
                     } else {
-                        ImGui::TextColored(dimCol, "FPS  ---");
+                        TextColoredFont(g_overlayLabelFont, fpsCol, "FPS");
+                        ImGui::SameLine(0, 4);
+                        TextColoredFont(g_overlayValueFont, dimCol, "---");
                     }
                     needSep = true;
                 }
 
                 // CPU
                 if (g_Config.showCPU) {
-                    if (needSep) { ImGui::Spacing(); }
-                    ImGui::TextColored(textCol, "CPU  %.0f%%", cpuUsage);
-                    // Show CPU temp if available
+                    if (needSep) ImGui::SameLine(0, 12);
+                    TextColoredFont(g_overlayLabelFont, cpuCol, "CPU");
+                    ImGui::SameLine(0, 4);
+                    TextColoredFont(g_overlayValueFont, valCol, "%.0f%%", cpuUsage);
                     if (g_cpuTempAvailable && g_cpuTemp > 0) {
-                        ImGui::SameLine();
+                        ImGui::SameLine(0, 6);
                         float dispTemp = ToDisplayTemp(g_cpuTemp, g_Config.useFahrenheit);
-                        ImGui::TextColored(textCol, " %.0f\xC2\xB0%s", dispTemp, g_Config.useFahrenheit ? "F" : "C");
+                        TextColoredFont(g_overlayValueFont, valCol, "%.0f\xC2\xB0%s", dispTemp, g_Config.useFahrenheit ? "F" : "C");
                     }
                     needSep = true;
                 }
 
-                // GPU stats via LHWM
+                // GPU
                 if (g_Config.showGPU) {
-                    if (needSep) { ImGui::Spacing(); }
-                    
+                    if (needSep) ImGui::SameLine(0, 12);
+
                     float dispGpuLoad = g_gpuUsage;
                     float dispGpuTemp = g_gpuTemp;
-                    float dispVramUsed = g_vramUsed;
-                    float dispVramTotal = g_vramTotal;
                     bool hasGpuData = g_lhwmAvailable && g_gpuCount > 0;
-                    
+
                     if (hasGpuData) {
-                        ImGui::TextColored(textCol, "GPU  %.0f%%", dispGpuLoad);
+                        TextColoredFont(g_overlayLabelFont, gpuCol, "GPU");
+                        ImGui::SameLine(0, 4);
+                        TextColoredFont(g_overlayValueFont, valCol, "%.0f%%", dispGpuLoad);
                         if (dispGpuTemp > 0) {
-                            ImGui::SameLine();
+                            ImGui::SameLine(0, 6);
                             float dispTemp = ToDisplayTemp(dispGpuTemp, g_Config.useFahrenheit);
-                            ImGui::TextColored(textCol, " %.0f\xC2\xB0%s", dispTemp, g_Config.useFahrenheit ? "F" : "C");
+                            TextColoredFont(g_overlayValueFont, valCol, "%.0f\xC2\xB0%s", dispTemp, g_Config.useFahrenheit ? "F" : "C");
                         }
                         if (g_Config.showGpuHotspot && !g_lhwmGpuHotspotPath.empty() && g_gpuHotspotTemp > 0) {
                             ImGui::SameLine(0, 6);
                             float dispHotspot = ToDisplayTemp(g_gpuHotspotTemp, g_Config.useFahrenheit);
-                            ImGui::TextColored(textCol, "HS %.0f\xC2\xB0%s", dispHotspot, g_Config.useFahrenheit ? "F" : "C");
+                            TextColoredFont(g_overlayValueFont, valCol, "%.0f\xC2\xB0%s", dispHotspot, g_Config.useFahrenheit ? "F" : "C");
                         }
-                        // VRAM usage
-                        if (g_Config.showVRAM && dispVramTotal > 0) {
-                            float vramPct = (dispVramUsed / dispVramTotal) * 100.0f;
-                            ImGui::TextColored(textCol, "VRAM %.0f%%", vramPct);
-                            ImGui::SameLine();
-                            ImGui::TextColored(textCol, " %.1f / %.0f GB", dispVramUsed, dispVramTotal);
+                        if (g_Config.showVRAM) {
+                            float dispVramUsed = g_vramUsed;
+                            float dispVramTotal = g_vramTotal;
+                            if (dispVramTotal > 0) {
+                                ImGui::SameLine(0, 8);
+                                TextColoredFont(g_overlayValueFont, valCol, "%.1f/%.0fG", dispVramUsed, dispVramTotal);
+                            }
                         }
                     } else {
-                        ImGui::TextColored(dimCol, "GPU  N/A");
+                        TextColoredFont(g_overlayValueFont, dimCol, "GPU N/A");
                     }
                     needSep = true;
                 }
 
                 // RAM
                 if (g_Config.showRAM) {
-                    if (needSep) { ImGui::Spacing(); }
-                    float pct = (ramUsed / ramTotal) * 100;
-                    ImGui::TextColored(textCol, "RAM  %.0f%%", pct);
-                    ImGui::SameLine();
-                    ImGui::TextColored(textCol, " %.1f / %.1f GB", ramUsed, ramTotal);
+                    if (needSep) ImGui::SameLine(0, 12);
+                    TextColoredFont(g_overlayLabelFont, memCol, "RAM");
+                    ImGui::SameLine(0, 4);
+                    TextColoredFont(g_overlayValueFont, valCol, "%.1f/%.1f GB", ramUsed, ramTotal);
+                    needSep = true;
                 }
             }
             
