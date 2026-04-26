@@ -74,8 +74,8 @@ Grab the latest from the [Releases](../../releases) page, or build from source (
 | Action | How |
 |--------|-----|
 | Right-click menu | Hold **CTRL** + right-click over the overlay |
-| Toggle visibility | Your hotkey (default: **/**) |
-| Exit | Your hotkey (default: *****) |
+| Toggle visibility | Your hotkey (default: **`Ctrl + /`**) |
+| Toggle settings | Your hotkey (default: **`Ctrl + *`**) |
 
 > **Note:** CTRL only works while the mouse is over the overlay, so it won't interfere with other apps.
 
