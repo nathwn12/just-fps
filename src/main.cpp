@@ -55,7 +55,7 @@
 #define IDM_UPDATE    1005
 
 // Current version
-#define APP_VERSION "v1.0.2"
+#define APP_VERSION "v2.0.0"
 
 // PawnIO installer resource ID (embedded executable)
 #define IDR_PAWNIO_SETUP 101
@@ -115,13 +115,16 @@ struct OverlayConfig {
     bool showRAM  = false;
     bool useFahrenheit = false; // false = Celsius, true = Fahrenheit
     bool autoStart = true;   // skip config window and start overlay immediately
+    bool showFpsLowHigh = true;
+    bool showCpuFrequency = true;
+    bool showGpuFrequency = true;
     int  position = 4;        // 0=TL 1=TR 2=BL 3=BR 4=TC 5=BC
-    int  opacity  = 100;      // 30..100 %
     float uiScale = 1.0f;     // overlay UI scale (1.0 = default)
-    int  toggleKey    = VK_OEM_2;
-    int  settingsKey  = VK_MULTIPLY;
-    int  toggleMod    = HMOD_CTRL;   // modifier flags for toggle key
-    int  settingsMod  = HMOD_CTRL;   // modifier flags for settings key
+    float textSaturation = 1.0f; // overlay text saturation/contrast
+    int  toggleKey    = 0;
+    int  settingsKey  = 0;
+    int  toggleMod    = 0;   // modifier flags for toggle key
+    int  settingsMod  = 0;   // modifier flags for settings key
     int  selectedGpu  = 0;     // selected GPU index (0 = first GPU)
 };
 
@@ -137,6 +140,8 @@ struct GpuInfo {
     std::string loadPath;      // LHWM sensor path for GPU load
     std::string vramUsedPath;  // LHWM sensor path for VRAM used
     std::string vramTotalPath; // LHWM sensor path for VRAM total
+    std::string clockPath;     // LHWM sensor path for GPU core clock
+    std::string clockMaxPath;  // LHWM sensor path for GPU boost/max clock
 };
 static GpuInfo g_gpuList[MAX_GPUS];
 static int g_gpuCount = 0;
@@ -144,6 +149,31 @@ static int g_gpuCount = 0;
 // Helper to convert Celsius to Fahrenheit
 inline float ToDisplayTemp(float celsius, bool useFahrenheit) {
     return useFahrenheit ? (celsius * 9.0f / 5.0f + 32.0f) : celsius;
+}
+
+inline ImVec4 AdjustTextSaturation(const ImVec4& color, float saturation) {
+    const float luminance = color.x * 0.299f + color.y * 0.587f + color.z * 0.114f;
+    return ImVec4(
+        std::clamp(luminance + (color.x - luminance) * saturation, 0.0f, 1.0f),
+        std::clamp(luminance + (color.y - luminance) * saturation, 0.0f, 1.0f),
+        std::clamp(luminance + (color.z - luminance) * saturation, 0.0f, 1.0f),
+        color.w
+    );
+}
+
+inline ImVec4 AdjustNeutralTextContrast(const ImVec4& color, float saturation) {
+    float contrastScale;
+    if (saturation <= 1.0f) {
+        contrastScale = 0.55f + 0.45f * saturation;
+    } else {
+        contrastScale = 1.0f + 0.25f * ((saturation - 1.0f) / 0.40f);
+    }
+    return ImVec4(
+        std::clamp(color.x * contrastScale, 0.0f, 1.0f),
+        std::clamp(color.y * contrastScale, 0.0f, 1.0f),
+        std::clamp(color.z * contrastScale, 0.0f, 1.0f),
+        color.w
+    );
 }
 
 // Temperature thresholds (in Celsius) - adjust for F display comparison
@@ -216,26 +246,29 @@ static void LoadConfig(OverlayConfig& cfg)
     cfg.showGpuHotspot = ReadIniInt("Display", "showGpuHotspot", 1) != 0;
     cfg.showVRAM      = ReadIniInt("Display", "showVRAM", 0) != 0;
     cfg.showRAM       = ReadIniInt("Display", "showRAM", 0) != 0;
+    cfg.showFpsLowHigh   = ReadIniInt("Display", "showFpsLowHigh", 1) != 0;
+    cfg.showCpuFrequency = ReadIniInt("Display", "showCpuFrequency", 1) != 0;
+    cfg.showGpuFrequency = ReadIniInt("Display", "showGpuFrequency", 1) != 0;
     cfg.autoStart     = ReadIniInt("Layout", "autoStart", 1) != 0;
     cfg.position      = ReadIniInt("Layout", "position", 4);
-    cfg.opacity       = ReadIniInt("Layout", "opacity", 100);
     cfg.uiScale       = ReadIniFloat("Layout", "uiScale", 1.0f);
+    cfg.textSaturation = ReadIniFloat("Layout", "textSaturation", 1.0f);
 
     // Hotkeys
-    cfg.toggleKey     = ReadIniInt("Hotkeys", "toggleKey", VK_OEM_2);
-    cfg.settingsKey   = ReadIniInt("Hotkeys", "exitKey", VK_MULTIPLY);
-    cfg.toggleMod     = ReadIniInt("Hotkeys", "toggleMod", HMOD_CTRL);
-    cfg.settingsMod   = ReadIniInt("Hotkeys", "settingsMod", HMOD_CTRL);
+    cfg.toggleKey     = ReadIniInt("Hotkeys", "toggleKey", 0);
+    cfg.settingsKey   = ReadIniInt("Hotkeys", "exitKey", 0);
+    cfg.toggleMod     = ReadIniInt("Hotkeys", "toggleMod", 0);
+    cfg.settingsMod   = ReadIniInt("Hotkeys", "settingsMod", 0);
     
     // GPU selection
     cfg.selectedGpu   = ReadIniInt("GPU", "selectedGpu", 0);
     
     // Clamp values to valid ranges
     if (cfg.position < 0 || cfg.position > 5) cfg.position = 4;
-    if (cfg.opacity < 30) cfg.opacity = 30;
-    if (cfg.opacity > 100) cfg.opacity = 100;
-    if (cfg.uiScale < 0.50f) cfg.uiScale = 0.50f;
-    if (cfg.uiScale > 1.50f) cfg.uiScale = 1.50f;
+    if (cfg.uiScale < 0.75f) cfg.uiScale = 0.75f;
+    if (cfg.uiScale > 2.25f) cfg.uiScale = 2.25f;
+    if (cfg.textSaturation < 0.00f) cfg.textSaturation = 0.00f;
+    if (cfg.textSaturation > 1.40f) cfg.textSaturation = 1.40f;
     if (cfg.selectedGpu < 0) cfg.selectedGpu = 0;
 }
 
@@ -288,13 +321,16 @@ static void SaveConfig(const OverlayConfig& cfg)
     WriteIniInt("Display", "showGpuHotspot", cfg.showGpuHotspot ? 1 : 0);
     WriteIniInt("Display", "showVRAM", cfg.showVRAM ? 1 : 0);
     WriteIniInt("Display", "showRAM", cfg.showRAM ? 1 : 0);
+    WriteIniInt("Display", "showFpsLowHigh", cfg.showFpsLowHigh ? 1 : 0);
+    WriteIniInt("Display", "showCpuFrequency", cfg.showCpuFrequency ? 1 : 0);
+    WriteIniInt("Display", "showGpuFrequency", cfg.showGpuFrequency ? 1 : 0);
     
     // Layout settings
     WriteIniInt("Layout", "useFahrenheit", cfg.useFahrenheit ? 1 : 0);
     WriteIniInt("Layout", "autoStart", cfg.autoStart ? 1 : 0);
     WriteIniInt("Layout", "position", cfg.position);
-    WriteIniInt("Layout", "opacity", cfg.opacity);
     WriteIniFloat("Layout", "uiScale", cfg.uiScale);
+    WriteIniFloat("Layout", "textSaturation", cfg.textSaturation);
 
     // Hotkeys
     WriteIniInt("Hotkeys", "toggleKey", cfg.toggleKey);
@@ -330,6 +366,10 @@ static const char* GetKeyName(int vk);
 
 static void FormatKeyBinding(char* buf, int bufSize, int vk, int mod)
 {
+    if (vk <= 0) {
+        strcpy_s(buf, bufSize, "(unbound)");
+        return;
+    }
     buf[0] = '\0';
     if (mod & HMOD_CTRL)  { strcat_s(buf, bufSize, "Ctrl+"); }
     if (mod & HMOD_ALT)   { strcat_s(buf, bufSize, "Alt+"); }
@@ -348,6 +388,8 @@ static AppMode       g_Mode       = MODE_CONFIG;
 static PendingCmd    g_Pending    = CMD_NONE;
 static bool          g_Running    = true;
 static bool          g_OvlVisible = true;
+static bool          g_overlaySettingsOpen = false;
+static bool          g_overlaySettingsJustOpened = false;
 
 static HINSTANCE      g_hInstance = nullptr;
 static HWND           g_hwnd     = nullptr;
@@ -452,12 +494,21 @@ static float g_gpuHotspotTemp = 0.0f;
 static float g_vramUsed  = 0.0f;  // in GB
 static float g_vramTotal = 0.0f;  // in GB
 
+// ── Clock frequency values (from LHWM) ──
+static float g_cpuClockMhz = 0.0f;
+static float g_cpuClockMaxMhz = 0.0f;
+static float g_gpuClockMhz = 0.0f;
+static float g_gpuClockMaxMhz = 0.0f;
+
 // ── ETW state ──
 static TRACEHANDLE      g_etwSession = 0;
 static TRACEHANDLE      g_etwTrace   = 0;
 static std::thread      g_etwThread;
 static std::atomic<bool>  g_etwRunning{false};
 static std::atomic<float> g_gameFps{0.0f};
+static float g_fpsLow = 0.0f;
+static float g_fpsHigh = 0.0f;
+static bool  g_fpsRangeInitialized = false;
 static std::atomic<DWORD> g_targetPid{0};
 static DWORD              g_lastTargetPid = 0;    // to detect PID change
 static bool               g_etwAvailable = false;
@@ -477,6 +528,10 @@ static std::string g_lhwmGpuHotspotPath;   // GPU hotspot temperature, if availa
 static std::string g_lhwmGpuLoadPath;      // e.g., "/gpu-nvidia/0/load/0"
 static std::string g_lhwmGpuVramUsedPath;  // VRAM used
 static std::string g_lhwmGpuVramTotalPath; // VRAM total
+static std::string g_lhwmCpuClockPath;
+static std::string g_lhwmCpuClockMaxPath;
+static std::string g_lhwmGpuClockPath;
+static std::string g_lhwmGpuClockMaxPath;
 static float g_lhwmCpuTemp = 0.0f;         // CPU temp from LHWM (used directly)
 
 // ── DX11 ──
@@ -1001,6 +1056,8 @@ static bool InitLHWM()
                     g_gpuList[gpuIndex].loadPath.clear();
                     g_gpuList[gpuIndex].vramUsedPath.clear();
                     g_gpuList[gpuIndex].vramTotalPath.clear();
+                    g_gpuList[gpuIndex].clockPath.clear();
+                    g_gpuList[gpuIndex].clockMaxPath.clear();
                     g_gpuCount++;
                 }
             }
@@ -1029,6 +1086,17 @@ static bool InitLHWM()
                         g_lhwmCpuTempPath = sensorPath;  // Best choice for Intel
                     } else if (g_lhwmCpuTempPath.empty()) {
                         cpuTempFallback = sensorPath;
+                    }
+                    
+                }
+                
+                // CPU Clock sensors
+                if ((isCpuHardware || isCpuPath) && sensorType == "Clock") {
+                    if (sensorName.find("Core") != std::string::npos || g_lhwmCpuClockPath.empty()) {
+                        g_lhwmCpuClockPath = sensorPath;
+                    }
+                    if (sensorName.find("Max") != std::string::npos || sensorName.find("Boost") != std::string::npos) {
+                        g_lhwmCpuClockMaxPath = sensorPath;
                     }
                 }
                 
@@ -1068,6 +1136,14 @@ static bool InitLHWM()
                             g_gpuList[gpuIndex].vramTotalPath = sensorPath;
                         }
                     }
+                    else if (sensorType == "Clock") {
+                        if (sensorName.find("Core") != std::string::npos || g_gpuList[gpuIndex].clockPath.empty()) {
+                            g_gpuList[gpuIndex].clockPath = sensorPath;
+                        }
+                        if (sensorName.find("Max") != std::string::npos || sensorName.find("Boost") != std::string::npos) {
+                            g_gpuList[gpuIndex].clockMaxPath = sensorPath;
+                        }
+                    }
                 }
             }
         }
@@ -1090,6 +1166,8 @@ static bool InitLHWM()
             g_lhwmGpuLoadPath = g_gpuList[idx].loadPath;
             g_lhwmGpuVramUsedPath = g_gpuList[idx].vramUsedPath;
             g_lhwmGpuVramTotalPath = g_gpuList[idx].vramTotalPath;
+            g_lhwmGpuClockPath = g_gpuList[idx].clockPath;
+            g_lhwmGpuClockMaxPath = g_gpuList[idx].clockMaxPath;
             snprintf(g_gpuName, sizeof(g_gpuName), "%s", g_gpuList[idx].name);
         }
         
@@ -1127,6 +1205,20 @@ static void PollLHWMStats()
         if (!g_lhwmGpuVramTotalPath.empty()) {
             g_vramTotal = LHWM::GetSensorValue(g_lhwmGpuVramTotalPath) / 1024.0f;
         }
+        
+        // Clock sensors
+        if (!g_lhwmCpuClockPath.empty()) {
+            g_cpuClockMhz = LHWM::GetSensorValue(g_lhwmCpuClockPath);
+        }
+        if (!g_lhwmCpuClockMaxPath.empty()) {
+            g_cpuClockMaxMhz = LHWM::GetSensorValue(g_lhwmCpuClockMaxPath);
+        }
+        if (!g_lhwmGpuClockPath.empty()) {
+            g_gpuClockMhz = LHWM::GetSensorValue(g_lhwmGpuClockPath);
+        }
+        if (!g_lhwmGpuClockMaxPath.empty()) {
+            g_gpuClockMaxMhz = LHWM::GetSensorValue(g_lhwmGpuClockMaxPath);
+        }
     }
     catch (...) {
         // Silently ignore polling errors
@@ -1146,6 +1238,8 @@ static void SelectGpu(int index)
     g_lhwmGpuLoadPath = g_gpuList[index].loadPath;
     g_lhwmGpuVramUsedPath = g_gpuList[index].vramUsedPath;
     g_lhwmGpuVramTotalPath = g_gpuList[index].vramTotalPath;
+    g_lhwmGpuClockPath = g_gpuList[index].clockPath;
+    g_lhwmGpuClockMaxPath = g_gpuList[index].clockMaxPath;
     
     snprintf(g_gpuName, sizeof(g_gpuName), "%s", g_gpuList[index].name);
 }
@@ -1550,6 +1644,7 @@ void SwitchToOverlay()
 
     g_Mode       = MODE_OVERLAY;
     g_OvlVisible = true;
+    g_overlaySettingsOpen = false;
 }
 
 void SwitchToConfig()
@@ -1577,11 +1672,27 @@ void SwitchToConfig()
     SetForegroundWindow(g_hwnd);
     SetFocus(g_hwnd);
     g_Mode = MODE_CONFIG;
+    g_overlaySettingsOpen = false;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Rendering helpers
 // ═══════════════════════════════════════════════════════════════════════════
+static void DrawFrequency(ImFont* valueFont, const ImVec4& color, float currentMhz, float maxMhz) {
+    if (currentMhz <= 0.0f) return;
+    float currentGhz = currentMhz / 1000.0f;
+    if (maxMhz > 0.0f) {
+        float maxGhz = maxMhz / 1000.0f;
+        if (valueFont) ImGui::PushFont(valueFont);
+        ImGui::TextColored(color, "%.2f/%.2f GHz", currentGhz, maxGhz);
+        if (valueFont) ImGui::PopFont();
+    } else {
+        if (valueFont) ImGui::PushFont(valueFont);
+        ImGui::TextColored(color, "%.2f GHz", currentGhz);
+        if (valueFont) ImGui::PopFont();
+    }
+}
+
 static void Present(float r, float g, float b, float a)
 {
     ImGui::Render();
@@ -1735,39 +1846,46 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
         if (!g_Running) break;
 
         if (g_Pending == CMD_START_OVERLAY) { g_Pending = CMD_NONE; SwitchToOverlay(); }
-        if (g_Pending == CMD_SHOW_SETTINGS) { g_Pending = CMD_NONE; SwitchToConfig(); }
+        if (g_Pending == CMD_SHOW_SETTINGS) {
+            g_Pending = CMD_NONE;
+            if (g_Mode == MODE_OVERLAY) {
+                g_OvlVisible = true;
+                g_overlaySettingsOpen = true;
+                g_overlaySettingsJustOpened = true;
+            } else {
+                SwitchToConfig();
+            }
+        }
         if (g_Pending == CMD_EXIT)          { g_Running = false; break; }
+
+        // ── Hotkey listener for rebind UI ──
+        if (g_listeningFor != 0) {
+            if (GetAsyncKeyState(VK_ESCAPE) & 1) {
+                g_listeningFor = 0;
+            } else {
+                for (int vk = 1; vk < 256; vk++) {
+                    if (vk == VK_LBUTTON || vk == VK_RBUTTON || vk == VK_MBUTTON) continue;
+                    if (vk == VK_ESCAPE) continue;
+                    if (vk == VK_CONTROL || vk == VK_LCONTROL || vk == VK_RCONTROL) continue;
+                    if (vk == VK_SHIFT || vk == VK_LSHIFT || vk == VK_RSHIFT) continue;
+                    if (vk == VK_MENU || vk == VK_LMENU || vk == VK_RMENU) continue;
+
+                    if (GetAsyncKeyState(vk) & 1) {
+                        int mod = HeldMods();
+                        if (g_listeningFor == 1) { g_Config.toggleKey = vk; g_Config.toggleMod = mod; }
+                        if (g_listeningFor == 2) { g_Config.settingsKey = vk; g_Config.settingsMod = mod; }
+                        g_listeningFor = 0;
+                        break;
+                    }
+                }
+            }
+        }
 
         // ══════════════════════════════════════════════════════════════
         // CONFIG MODE
         // ══════════════════════════════════════════════════════════════
         if (g_Mode == MODE_CONFIG)
         {
-            // ── Hotkey listener (runs even during config rendering) ──
-            if (g_listeningFor != 0) {
-                // Check if ESC was pressed to cancel
-                if (GetAsyncKeyState(VK_ESCAPE) & 1) {
-                    g_listeningFor = 0;
-                } else {
-                    for (int vk = 1; vk < 256; vk++) {
-                        // Skip mouse buttons and modifier-only keys we don't want
-                        if (vk == VK_LBUTTON || vk == VK_RBUTTON || vk == VK_MBUTTON) continue;
-                        if (vk == VK_ESCAPE) continue;  // handled above
-                        if (vk == VK_CONTROL || vk == VK_LCONTROL || vk == VK_RCONTROL) continue;
-                        if (vk == VK_SHIFT || vk == VK_LSHIFT || vk == VK_RSHIFT) continue;
-                        if (vk == VK_MENU || vk == VK_LMENU || vk == VK_RMENU) continue;  // Alt keys
-                        
-                        if (GetAsyncKeyState(vk) & 1) {
-                            int mod = HeldMods();
-                            if (g_listeningFor == 1) { g_Config.toggleKey = vk; g_Config.toggleMod = mod; }
-                            if (g_listeningFor == 2) { g_Config.settingsKey = vk; g_Config.settingsMod = mod; }
-                            g_listeningFor = 0;
-                            break;
-                        }
-                    }
-                }
-            }
-
             ImGui_ImplDX11_NewFrame();
             ImGui_ImplWin32_NewFrame();
             ImGui::NewFrame();
@@ -1828,6 +1946,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
                 ImGui::SameLine();
                 ImGui::TextColored(ImVec4(.45f,.45f,.50f,1), "(unsupported)");
             }
+            ImGui::Checkbox("  Show FPS lows/highs", &g_Config.showFpsLowHigh);
+            ImGui::Checkbox("  Show CPU frequency", &g_Config.showCpuFrequency);
+            ImGui::Checkbox("  Show GPU frequency", &g_Config.showGpuFrequency);
             ImGui::Checkbox("  GPU VRAM Usage", &g_Config.showVRAM);
             if (!g_lhwmAvailable || g_gpuCount == 0) {
                 ImGui::SameLine();
@@ -1884,9 +2005,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
             ImGui::Spacing();
             ImGui::TextColored(ImVec4(.45f,.45f,.50f,1), "Overlay UI Size");
             ImGui::SetNextItemWidth(-1);
-            ImGui::SliderFloat("##uiscale", &g_Config.uiScale, 0.50f, 1.50f, "%.2fx");
+            ImGui::SliderFloat("##uiscale", &g_Config.uiScale, 0.75f, 2.25f, "");
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Scales only the in-game overlay");
+            ImGui::TextColored(ImVec4(.45f,.45f,.50f,1), "Text Saturation");
+            ImGui::SetNextItemWidth(-1);
+            ImGui::SliderFloat("##textsat", &g_Config.textSaturation, 0.00f, 1.40f, "");
             
             // ── TEMPERATURE UNIT ──
             ImGui::Spacing(); ImGui::Spacing();
@@ -1897,20 +2021,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
             ImGui::SameLine(0,24);
             if (ImGui::RadioButton("Fahrenheit", &tempUnit, 1)) g_Config.useFahrenheit = true;
 
-            // ── OPACITY ──
-            ImGui::Spacing(); ImGui::Spacing();
-            ImGui::TextColored(ImVec4(.55f,.70f,.95f,1), "OPACITY");
-            ImGui::Spacing();
-            ImGui::SetNextItemWidth(-1);
-            ImGui::SliderInt("##opac", &g_Config.opacity, 30, 100, "%d%%");
-
             // ── HOTKEYS ──
             ImGui::Spacing(); ImGui::Spacing();
             ImGui::TextColored(ImVec4(.55f,.70f,.95f,1), "HOTKEYS");
             ImGui::Spacing();
+            ImGui::TextColored(ImVec4(.45f,.45f,.50f,1), "Leave unbound until you choose your own keys.");
+            ImGui::TextColored(ImVec4(.45f,.45f,.50f,1), "Set one for Show/Hide FPS Overlay and one for Show/Hide Settings UI.");
+            ImGui::Spacing();
 
             // Toggle key
-            ImGui::Text("Toggle:");
+            ImGui::Text("Overlay:");
             ImGui::SameLine(90);
             if (g_listeningFor == 1) {
                 ImGui::TextColored(ImVec4(1,.8f,.2f,1), "Press any key...  ");
@@ -1922,10 +2042,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
                 ImGui::Text("%s", buf);
                 ImGui::SameLine();
                 if (ImGui::SmallButton("Change##1")) g_listeningFor = 1;
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Clear##1")) { g_Config.toggleKey = 0; g_Config.toggleMod = 0; }
             }
 
             // Settings key
-            ImGui::Text("Settings:");
+            ImGui::Text("Settings UI:");
             ImGui::SameLine(90);
             if (g_listeningFor == 2) {
                 ImGui::TextColored(ImVec4(1,.8f,.2f,1), "Press any key...  ");
@@ -1937,6 +2059,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
                 ImGui::Text("%s", buf);
                 ImGui::SameLine();
                 if (ImGui::SmallButton("Change##2")) g_listeningFor = 2;
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Clear##2")) { g_Config.settingsKey = 0; g_Config.settingsMod = 0; }
             }
 
             // ── STARTUP ──
@@ -1999,39 +2123,51 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
 
             // ── Update target PID (foreground window's process) ──
             HWND fg = GetForegroundWindow();
-            DWORD currentPid = 0;
+            DWORD currentPid = g_lastTargetPid;
             if (fg && fg != g_hwnd) {
                 GetWindowThreadProcessId(fg, &currentPid);
                 g_targetPid.store(currentPid, std::memory_order_relaxed);
             }
+            auto now = Clock::now();
             
             // ── Reset FPS when target app changes or closes ──
             if (currentPid != g_lastTargetPid) {
                 g_gameFps.store(0.0f, std::memory_order_relaxed);
                 g_lastTargetPid = currentPid;
+                g_fpsRangeInitialized = false;
+                g_fpsLow = 0.0f;
+                g_fpsHigh = 0.0f;
                 // Update process name
                 GetProcessName(currentPid, g_targetProcessName, sizeof(g_targetProcessName));
             }
             // Also check if the process is still alive
-            if (g_lastTargetPid != 0) {
+            static auto lastPidAliveCheck = Clock::now();
+            if (g_lastTargetPid != 0 &&
+                std::chrono::duration<float>(now - lastPidAliveCheck).count() >= 1.0f) {
+                lastPidAliveCheck = now;
                 HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, g_lastTargetPid);
                 if (hProc) {
                     DWORD exitCode = 0;
                     if (GetExitCodeProcess(hProc, &exitCode) && exitCode != STILL_ACTIVE) {
                         g_gameFps.store(0.0f, std::memory_order_relaxed);
                         g_lastTargetPid = 0;
+                        g_fpsRangeInitialized = false;
+                        g_fpsLow = 0.0f;
+                        g_fpsHigh = 0.0f;
                     }
                     CloseHandle(hProc);
                 } else {
                     // Process no longer exists
                     g_gameFps.store(0.0f, std::memory_order_relaxed);
                     g_lastTargetPid = 0;
+                    g_fpsRangeInitialized = false;
+                    g_fpsLow = 0.0f;
+                    g_fpsHigh = 0.0f;
                 }
             }
 
             // ── Periodic metrics (once/sec) ──
             static float cachedRamUsed = 0, cachedRamTotal = 1;
-            auto now = Clock::now();
 
             {
                 float cpuElapsed = std::chrono::duration<float>(now - lastCpuTime).count();
@@ -2079,6 +2215,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
             // ── Game FPS (from ETW) ──
             float gameFps = g_gameFps.load(std::memory_order_relaxed);
 
+            // ── Track FPS low/high ──
+            if (gameFps > 0.0f) {
+                if (!g_fpsRangeInitialized) {
+                    g_fpsLow = gameFps;
+                    g_fpsHigh = gameFps;
+                    g_fpsRangeInitialized = true;
+                } else {
+                    if (gameFps < g_fpsLow) g_fpsLow = gameFps;
+                    if (gameFps > g_fpsHigh) g_fpsHigh = gameFps;
+                }
+            }
+
             // ── Handle CTRL key for right-click menu ──
             // Only respond to CTRL when cursor is hovering over the overlay
             POINT cursorPt; GetCursorPos(&cursorPt);
@@ -2101,17 +2249,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
             }
             
             bool ctrlHeld = interactionActive;
-            
+
             // Manage click-through state
-            static bool wasCtrlHeld = false;
-            if (ctrlHeld && !wasCtrlHeld) {
-                // Entering interaction mode - disable click-through
+            bool wantsInput = ctrlHeld || g_overlaySettingsOpen;
+            static bool clickThroughEnabled = true;
+            if (wantsInput && clickThroughEnabled) {
                 SetClickThrough(false);
-                wasCtrlHeld = true;
-            } else if (!ctrlHeld && wasCtrlHeld) {
-                // Exiting interaction mode - re-enable click-through
+                clickThroughEnabled = false;
+            } else if (!wantsInput && !clickThroughEnabled) {
                 SetClickThrough(true);
-                wasCtrlHeld = false;
+                clickThroughEnabled = true;
             }
             
             // Right-click context menu (when CTRL is held AND right-click happens IN interaction mode)
@@ -2173,7 +2320,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
                 ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav |
                 ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMove;
             
-            if (!ctrlHeld) {
+            if (!ctrlHeld && !g_overlaySettingsOpen) {
                 wf |= ImGuiWindowFlags_NoInputs;
             }
 
@@ -2181,12 +2328,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
             ImGui::SetWindowFontScale(g_Config.uiScale);
 
             // Steam-like colors: muted colored labels, soft gray values.
-            const ImVec4 fpsCol(0.93f, 0.50f, 0.50f, 1.0f);   // Salmon
-            const ImVec4 cpuCol(0.84f, 0.88f, 0.33f, 1.0f);   // Yellow-green
-            const ImVec4 gpuCol(0.20f, 0.76f, 0.28f, 1.0f);   // Steam green
-            const ImVec4 memCol(0.78f, 0.55f, 0.96f, 1.0f);   // Lavender
-            const ImVec4 valCol(0.80f, 0.80f, 0.82f, 1.0f);   // Values
-            const ImVec4 dimCol(0.45f, 0.45f, 0.48f, 1.0f);   // Unavailable
+            const float textSat = g_Config.textSaturation;
+            const ImVec4 fpsCol = AdjustTextSaturation(ImVec4(0.93f, 0.50f, 0.50f, 1.0f), textSat); // Salmon
+            const ImVec4 cpuCol = AdjustTextSaturation(ImVec4(0.84f, 0.88f, 0.33f, 1.0f), textSat); // Yellow-green
+            const ImVec4 gpuCol = AdjustTextSaturation(ImVec4(0.20f, 0.76f, 0.28f, 1.0f), textSat); // Steam green
+            const ImVec4 memCol = AdjustTextSaturation(ImVec4(0.78f, 0.55f, 0.96f, 1.0f), textSat); // Lavender
+            const ImVec4 valCol = AdjustNeutralTextContrast(ImVec4(0.80f, 0.80f, 0.82f, 1.0f), textSat); // Values
+            const ImVec4 dimCol = AdjustNeutralTextContrast(ImVec4(0.45f, 0.45f, 0.48f, 1.0f), textSat); // Unavailable
             auto TextColoredFont = [](ImFont* font, const ImVec4& color, const char* fmt, ...) {
                 if (font) ImGui::PushFont(font);
                 va_list args;
@@ -2231,6 +2379,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
                         TextColoredFont(g_overlayLabelFont, fpsCol, "FPS");
                         ImGui::SameLine(0, 4);
                         TextColoredFont(g_overlayValueFont, valCol, "%.0f", gameFps);
+                        if (g_Config.showFpsLowHigh && g_fpsRangeInitialized) {
+                            ImGui::SameLine(0, 6);
+                            TextColoredFont(g_overlayValueFont, valCol, "\xE2\x86\x93%.0f", g_fpsLow);
+                            ImGui::SameLine(0, 6);
+                            TextColoredFont(g_overlayValueFont, valCol, "\xE2\x86\x91%.0f", g_fpsHigh);
+                        }
                     } else {
                         TextColoredFont(g_overlayLabelFont, fpsCol, "FPS");
                         ImGui::SameLine(0, 4);
@@ -2249,6 +2403,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
                         ImGui::SameLine(0, 6);
                         float dispTemp = ToDisplayTemp(g_cpuTemp, g_Config.useFahrenheit);
                         TextColoredFont(g_overlayValueFont, valCol, "%.0f\xC2\xB0%s", dispTemp, g_Config.useFahrenheit ? "F" : "C");
+                    }
+                    if (g_Config.showCpuFrequency && g_lhwmAvailable && g_cpuClockMhz > 0.0f) {
+                        ImGui::SameLine(0, 8);
+                        DrawFrequency(g_overlayValueFont, valCol, g_cpuClockMhz, g_cpuClockMaxMhz);
                     }
                     needSep = true;
                 }
@@ -2283,6 +2441,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
                                 TextColoredFont(g_overlayValueFont, valCol, "%.1f/%.0fG", dispVramUsed, dispVramTotal);
                             }
                         }
+                        if (g_Config.showGpuFrequency && hasGpuData && g_gpuClockMhz > 0.0f) {
+                            ImGui::SameLine(0, 8);
+                            DrawFrequency(g_overlayValueFont, valCol, g_gpuClockMhz, g_gpuClockMaxMhz);
+                        }
                     } else {
                         TextColoredFont(g_overlayValueFont, dimCol, "GPU N/A");
                     }
@@ -2305,6 +2467,122 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
                 ImGui::SetWindowFontScale(0.85f * g_Config.uiScale);
                 ImGui::TextColored(ImVec4(0.5f, 0.75f, 1.0f, 1.0f), "Right-click for menu");
                 ImGui::SetWindowFontScale(g_Config.uiScale);
+            }
+
+            if (g_overlaySettingsOpen) {
+                ImGui::SetNextWindowSize(ImVec2(420, 560), ImGuiCond_FirstUseEver);
+                if (g_overlaySettingsJustOpened) {
+                    ImGuiViewport* vp = ImGui::GetMainViewport();
+                    ImGui::SetNextWindowPos(vp->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+                    g_overlaySettingsJustOpened = false;
+                }
+                if (ImGui::Begin("Settings", &g_overlaySettingsOpen, ImGuiWindowFlags_NoCollapse)) {
+                    ImGui::TextColored(ImVec4(.35f,.78f,1,1), "justFPS Settings");
+                    ImGui::Separator();
+
+                    ImGui::Spacing();
+                    ImGui::TextColored(ImVec4(.55f,.70f,.95f,1), "DISPLAY");
+                    ImGui::Checkbox("FPS Counter (game)", &g_Config.showFPS);
+                    ImGui::Checkbox("CPU Usage & Temp", &g_Config.showCPU);
+                    ImGui::Checkbox("GPU Usage & Temp", &g_Config.showGPU);
+                    ImGui::Checkbox("GPU Hotspot Temp", &g_Config.showGpuHotspot);
+                    ImGui::Checkbox("Show FPS lows/highs", &g_Config.showFpsLowHigh);
+                    ImGui::Checkbox("Show CPU frequency", &g_Config.showCpuFrequency);
+                    ImGui::Checkbox("Show GPU frequency", &g_Config.showGpuFrequency);
+                    ImGui::Checkbox("GPU VRAM Usage", &g_Config.showVRAM);
+                    ImGui::Checkbox("RAM Usage", &g_Config.showRAM);
+
+                    if (g_gpuCount > 0) {
+                        ImGui::Spacing();
+                        ImGui::TextColored(ImVec4(.55f,.70f,.95f,1), "GPU SELECTION");
+                        const char* previewName = (g_Config.selectedGpu >= 0 && g_Config.selectedGpu < g_gpuCount)
+                            ? g_gpuList[g_Config.selectedGpu].name
+                            : "Select GPU...";
+                        ImGui::SetNextItemWidth(-1);
+                        if (ImGui::BeginCombo("##ovl_gpuselect", previewName)) {
+                            for (int i = 0; i < g_gpuCount; i++) {
+                                bool isSelected = (g_Config.selectedGpu == i);
+                                if (ImGui::Selectable(g_gpuList[i].name, isSelected)) {
+                                    SelectGpu(i);
+                                }
+                                if (isSelected) {
+                                    ImGui::SetItemDefaultFocus();
+                                }
+                            }
+                            ImGui::EndCombo();
+                        }
+                    }
+
+                    ImGui::Spacing();
+                    ImGui::TextColored(ImVec4(.55f,.70f,.95f,1), "POSITION");
+                    ImGui::RadioButton("Top Left",      &g_Config.position, 0); ImGui::SameLine(0,18);
+                    ImGui::RadioButton("Top Middle",    &g_Config.position, 4); ImGui::SameLine(0,18);
+                    ImGui::RadioButton("Top Right",     &g_Config.position, 1);
+                    ImGui::RadioButton("Bottom Left",   &g_Config.position, 2); ImGui::SameLine(0,18);
+                    ImGui::RadioButton("Bottom Middle", &g_Config.position, 5); ImGui::SameLine(0,18);
+                    ImGui::RadioButton("Bottom Right",  &g_Config.position, 3);
+
+                    ImGui::Spacing();
+                    ImGui::TextColored(ImVec4(.55f,.70f,.95f,1), "LAYOUT");
+                    ImGui::Text("Overlay UI Size");
+                    ImGui::SetNextItemWidth(-1);
+                    ImGui::SliderFloat("##ovl_uiscale", &g_Config.uiScale, 0.75f, 2.25f, "");
+                    ImGui::Text("Text Saturation");
+                    ImGui::SetNextItemWidth(-1);
+                    ImGui::SliderFloat("##ovl_textsat", &g_Config.textSaturation, 0.00f, 1.40f, "");
+                    ImGui::Spacing();
+                    ImGui::TextColored(ImVec4(.55f,.70f,.95f,1), "TEMPERATURE");
+                    int tempUnit = g_Config.useFahrenheit ? 1 : 0;
+                    if (ImGui::RadioButton("Celsius", &tempUnit, 0)) g_Config.useFahrenheit = false;
+                    ImGui::SameLine(0,24);
+                    if (ImGui::RadioButton("Fahrenheit", &tempUnit, 1)) g_Config.useFahrenheit = true;
+
+                    ImGui::Spacing();
+                    ImGui::TextColored(ImVec4(.55f,.70f,.95f,1), "HOTKEYS");
+                    ImGui::TextColored(ImVec4(.45f,.45f,.50f,1), "Leave unbound until you choose your own keys.");
+                    ImGui::TextColored(ImVec4(.45f,.45f,.50f,1), "Overlay toggles FPS UI. Settings UI toggles this panel.");
+
+                    ImGui::Text("Overlay:");
+                    ImGui::SameLine(90);
+                    if (g_listeningFor == 1) {
+                        ImGui::TextColored(ImVec4(1,.8f,.2f,1), "Press any key...  ");
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("Cancel##ovl_1")) g_listeningFor = 0;
+                    } else {
+                        char buf[64];
+                        FormatKeyBinding(buf, sizeof(buf), g_Config.toggleKey, g_Config.toggleMod);
+                        ImGui::Text("%s", buf);
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("Change##ovl_1")) g_listeningFor = 1;
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("Clear##ovl_1")) { g_Config.toggleKey = 0; g_Config.toggleMod = 0; }
+                    }
+
+                    ImGui::Text("Settings UI:");
+                    ImGui::SameLine(90);
+                    if (g_listeningFor == 2) {
+                        ImGui::TextColored(ImVec4(1,.8f,.2f,1), "Press any key...  ");
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("Cancel##ovl_2")) g_listeningFor = 0;
+                    } else {
+                        char buf[64];
+                        FormatKeyBinding(buf, sizeof(buf), g_Config.settingsKey, g_Config.settingsMod);
+                        ImGui::Text("%s", buf);
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("Change##ovl_2")) g_listeningFor = 2;
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("Clear##ovl_2")) { g_Config.settingsKey = 0; g_Config.settingsMod = 0; }
+                    }
+
+                    ImGui::Spacing();
+                    if (ImGui::Button("Apply Settings", ImVec2(-1, 34))) {
+                        SaveConfig(g_Config);
+                    }
+                    if (ImGui::Button("Close", ImVec2(-1, 34))) {
+                        g_overlaySettingsOpen = false;
+                    }
+                }
+                ImGui::End();
             }
 
             // Auto-resize can change the window after toggling stats, so align presets

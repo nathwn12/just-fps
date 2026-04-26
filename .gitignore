@@ -17,6 +17,20 @@
 *.gch
 *.pch
 
+# MSVC incremental link / build artifacts
+*.ilk
+*.exp
+*.pdb
+*.aps
+*.tlog
+*.lastbuildstate
+
+# Temp / backup files
+*.tmp
+*.bak
+*.swp
+*.sdf
+
 # ══════════════════════════════════════════════════════════════════════════════
 # IDE / Editor files
 # ══════════════════════════════════════════════════════════════════════════════
@@ -101,5 +115,7 @@ $RECYCLE.BIN/
 /node_modules
 *.mjs
 AGENTS.md
+.worktrees/
 *.zip
 *.ps1
+/docs
