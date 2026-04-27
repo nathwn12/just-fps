@@ -3,6 +3,9 @@ REM justFPS MSVC Build Script
 
 setlocal
 
+REM Change to the directory where this script is located
+pushd "%~dp0"
+
 REM Find vcvars64.bat
 set "VCVARS="
 for %%p in (
@@ -86,4 +89,5 @@ echo   - LibreHardwareMonitorLib.dll (for LHWM support)
 echo.
 echo Run as Administrator for full functionality.
 
+popd
 endlocal
