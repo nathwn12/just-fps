@@ -137,13 +137,13 @@ just-fps/
 ├── src/
 │   ├── main.cpp        # Everything lives here
 │   └── resource.rc     # Version info and icon
+├── dependencies/       # Gitignored — upstream source + update guide
 ├── libs/
 │   ├── imgui/          # Dear ImGui source
-│   └── lhwm/           # LibreHardwareMonitor wrapper DLLs
+│   └── lhwm/           # LHWM wrapper (single merged DLL, header, lib)
 ├── build/              # Build artifacts
 │   ├── justFPS.exe
-│   ├── lhwm-wrapper.dll
-│   ├── LibreHardwareMonitorLib.dll
+│   ├── lhwm-wrapper.dll # Self-contained (all managed deps merged)
 │   └── config.ini      # Auto-created on first run
 ├── icon.ico
 ├── screenshot.png

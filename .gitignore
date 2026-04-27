@@ -120,3 +120,4 @@ AGENTS.md
 *.ps1
 /docs
 /notes
+/dependencies

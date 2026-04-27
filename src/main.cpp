@@ -55,7 +55,7 @@
 #define IDM_UPDATE    1005
 
 // Current version
-#define APP_VERSION "v2.1.0"
+#define APP_VERSION "v2.2.0"
 
 // PawnIO installer resource ID (embedded executable)
 #define IDR_PAWNIO_SETUP 101
@@ -124,6 +124,8 @@ struct OverlayConfig {
     bool showGpuTemp = true;
     bool showGpuHotspot = true;
     bool showVRAM = false;     // GPU VRAM usage
+    bool showGpuPower = false; // GPU power draw
+    bool showGpuFan = false;   // GPU fan speed
     bool showRAM  = false;
     bool useFahrenheit = false; // false = Celsius, true = Fahrenheit
     bool autoStart = true;   // skip config window and start overlay immediately
@@ -134,7 +136,7 @@ struct OverlayConfig {
     float edgePadding = 16.0f; // distance from screen edge (px base, scaled by uiScale)
     float uiScale = 1.0f;     // overlay UI scale (1.0 = default)
     float textSaturation = 1.0f; // overlay text saturation/contrast
-    int  toggleKey    = 0;
+    int  toggleKey    = VK_F12;
     int  settingsKey  = 0;
     int  toggleMod    = 0;   // modifier flags for toggle key
     int  settingsMod  = 0;   // modifier flags for settings key
@@ -156,6 +158,8 @@ struct GpuInfo {
     std::string vramTotalPath; // LHWM sensor path for VRAM total
     std::string clockPath;     // LHWM sensor path for GPU core clock
     std::string clockMaxPath;  // LHWM sensor path for GPU boost/max clock
+    std::string powerPath;     // LHWM sensor path for GPU power
+    std::string fanPath;       // LHWM sensor path for GPU fan
 };
 static GpuInfo g_gpuList[MAX_GPUS];
 static int g_gpuCount = 0;
@@ -267,6 +271,8 @@ static void ApplyPreset(OverlayConfig& cfg, OverlayPreset preset)
         cfg.showGpuUtil = false;
         cfg.showGpuTemp = false;
         cfg.showGpuHotspot = false;
+        cfg.showGpuPower = false;
+        cfg.showGpuFan = false;
         cfg.showCpuFrequency = false;
         cfg.showGpuFrequency = false;
         cfg.showVRAM = false;
@@ -280,6 +286,8 @@ static void ApplyPreset(OverlayConfig& cfg, OverlayPreset preset)
         cfg.showGpuUtil = false;
         cfg.showGpuTemp = false;
         cfg.showGpuHotspot = false;
+        cfg.showGpuPower = false;
+        cfg.showGpuFan = false;
         cfg.showCpuFrequency = false;
         cfg.showGpuFrequency = false;
         cfg.showVRAM = false;
@@ -293,6 +301,8 @@ static void ApplyPreset(OverlayConfig& cfg, OverlayPreset preset)
         cfg.showGpuUtil = true;
         cfg.showGpuTemp = false;
         cfg.showGpuHotspot = false;
+        cfg.showGpuPower = false;
+        cfg.showGpuFan = false;
         cfg.showCpuFrequency = false;
         cfg.showGpuFrequency = false;
         cfg.showVRAM = false;
@@ -306,6 +316,8 @@ static void ApplyPreset(OverlayConfig& cfg, OverlayPreset preset)
         cfg.showGpuUtil = true;
         cfg.showGpuTemp = true;
         cfg.showGpuHotspot = true;
+        cfg.showGpuPower = false;
+        cfg.showGpuFan = false;
         cfg.showCpuFrequency = true;
         cfg.showGpuFrequency = true;
         cfg.showVRAM = true;
@@ -328,6 +340,8 @@ static bool SameDisplayFlags(const OverlayConfig& a, const OverlayConfig& b)
            a.showGpuUtil == b.showGpuUtil &&
            a.showGpuTemp == b.showGpuTemp &&
            a.showGpuHotspot == b.showGpuHotspot &&
+           a.showGpuPower == b.showGpuPower &&
+           a.showGpuFan == b.showGpuFan &&
            a.showCpuFrequency == b.showCpuFrequency &&
            a.showGpuFrequency == b.showGpuFrequency &&
            a.showVRAM == b.showVRAM &&
@@ -394,6 +408,8 @@ static void LoadConfig(OverlayConfig& cfg)
             cfg.showGpuUtil     = IniKeyExists("Display", "showGpuUtil") ? ReadIniInt("Display", "showGpuUtil", 1) != 0 : legacyShowGPU;
             cfg.showGpuTemp     = IniKeyExists("Display", "showGpuTemp") ? ReadIniInt("Display", "showGpuTemp", 1) != 0 : legacyShowGPU;
             cfg.showGpuHotspot  = IniKeyExists("Display", "showGpuHotspot") ? ReadIniInt("Display", "showGpuHotspot", 1) != 0 : legacyShowGPU;
+            cfg.showGpuPower    = IniKeyExists("Display", "showGpuPower") ? ReadIniInt("Display", "showGpuPower", 0) != 0 : false;
+            cfg.showGpuFan      = IniKeyExists("Display", "showGpuFan") ? ReadIniInt("Display", "showGpuFan", 0) != 0 : false;
             cfg.showCpuFrequency = IniKeyExists("Display", "showCpuFrequency") ? ReadIniInt("Display", "showCpuFrequency", 1) != 0 : legacyShowCPU;
             cfg.showGpuFrequency = IniKeyExists("Display", "showGpuFrequency") ? ReadIniInt("Display", "showGpuFrequency", 1) != 0 : legacyShowGPU;
             cfg.showVRAM        = IniKeyExists("Display", "showVRAM") ? ReadIniInt("Display", "showVRAM", 0) != 0 : legacyShowGPU;
@@ -408,6 +424,8 @@ static void LoadConfig(OverlayConfig& cfg)
         cfg.showGpuUtil     = legacyShowGPU;
         cfg.showGpuTemp     = legacyShowGPU;
         cfg.showGpuHotspot  = ReadIniInt("Display", "showGpuHotspot", 1) != 0;
+        cfg.showGpuPower    = ReadIniInt("Display", "showGpuPower", 0) != 0;
+        cfg.showGpuFan      = ReadIniInt("Display", "showGpuFan", 0) != 0;
         cfg.showVRAM        = ReadIniInt("Display", "showVRAM", 0) != 0;
         cfg.showRAM         = ReadIniInt("Display", "showRAM", 0) != 0;
         cfg.showFpsLowHigh  = ReadIniInt("Display", "showFpsLowHigh", 1) != 0;
@@ -424,7 +442,7 @@ static void LoadConfig(OverlayConfig& cfg)
     cfg.textSaturation = ReadIniFloat("Layout", "textSaturation", 1.0f);
 
     // Hotkeys
-    cfg.toggleKey     = ReadIniInt("Hotkeys", "toggleKey", 0);
+    cfg.toggleKey     = ReadIniInt("Hotkeys", "toggleKey", VK_F12);
     cfg.settingsKey   = ReadIniInt("Hotkeys", "exitKey", 0);
     cfg.toggleMod     = ReadIniInt("Hotkeys", "toggleMod", 0);
     cfg.settingsMod   = ReadIniInt("Hotkeys", "settingsMod", 0);
@@ -495,6 +513,8 @@ static void SaveConfig(const OverlayConfig& cfg)
     WriteIniInt("Display", "showGpuUtil", cfg.showGpuUtil ? 1 : 0);
     WriteIniInt("Display", "showGpuTemp", cfg.showGpuTemp ? 1 : 0);
     WriteIniInt("Display", "showGpuHotspot", cfg.showGpuHotspot ? 1 : 0);
+    WriteIniInt("Display", "showGpuPower", cfg.showGpuPower ? 1 : 0);
+    WriteIniInt("Display", "showGpuFan", cfg.showGpuFan ? 1 : 0);
     WriteIniInt("Display", "showVRAM", cfg.showVRAM ? 1 : 0);
     WriteIniInt("Display", "showRAM", cfg.showRAM ? 1 : 0);
     WriteIniInt("Display", "showFpsLowHigh", cfg.showFpsLowHigh ? 1 : 0);
@@ -668,12 +688,15 @@ static void CheckForUpdatesAsync()
 static float g_gpuUsage = 0.0f;
 static float g_gpuTemp  = 0.0f;
 static float g_gpuHotspotTemp = 0.0f;
+static float g_gpuPower = 0.0f;
+static float g_gpuFan = 0.0f;
 static float g_vramUsed  = 0.0f;  // in GB
 static float g_vramTotal = 0.0f;  // in GB
 
 // ── Clock frequency values (from LHWM) ──
 static float g_cpuClockMhz = 0.0f;
 static float g_cpuClockMaxMhz = 0.0f;
+static float g_cpuClockMaxObserved = 0.0f;
 static float g_gpuClockMhz = 0.0f;
 static float g_gpuClockMaxMhz = 0.0f;
 
@@ -698,13 +721,15 @@ static float g_cpuTemp = 0.0f;
 static bool  g_cpuTempAvailable = false;
 
 // ── LibreHardwareMonitor (LHWM) state ──
-static bool  g_lhwmAvailable = false;
+static std::atomic<bool> g_lhwmAvailable{false};
 static std::string g_lhwmCpuTempPath;      // e.g., "/amdcpu/0/temperature/3"
 static std::string g_lhwmGpuTempPath;      // e.g., "/gpu-nvidia/0/temperature/0"
 static std::string g_lhwmGpuHotspotPath;   // GPU hotspot temperature, if available
 static std::string g_lhwmGpuLoadPath;      // e.g., "/gpu-nvidia/0/load/0"
 static std::string g_lhwmGpuVramUsedPath;  // VRAM used
 static std::string g_lhwmGpuVramTotalPath; // VRAM total
+static std::string g_lhwmGpuPowerPath;
+static std::string g_lhwmGpuFanPath;
 static std::string g_lhwmCpuClockPath;
 static std::string g_lhwmCpuClockMaxPath;
 static std::string g_lhwmGpuClockPath;
@@ -1235,6 +1260,8 @@ static bool InitLHWM()
                     g_gpuList[gpuIndex].vramTotalPath.clear();
                     g_gpuList[gpuIndex].clockPath.clear();
                     g_gpuList[gpuIndex].clockMaxPath.clear();
+                    g_gpuList[gpuIndex].powerPath.clear();
+                    g_gpuList[gpuIndex].fanPath.clear();
                     g_gpuCount++;
                 }
             }
@@ -1313,6 +1340,16 @@ static bool InitLHWM()
                             g_gpuList[gpuIndex].vramTotalPath = sensorPath;
                         }
                     }
+                    else if (sensorType == "Power") {
+                        if (sensorName.find("GPU") != std::string::npos || sensorName.find("Core") != std::string::npos || g_gpuList[gpuIndex].powerPath.empty()) {
+                            g_gpuList[gpuIndex].powerPath = sensorPath;
+                        }
+                    }
+                    else if (sensorType == "Fan") {
+                        if (g_gpuList[gpuIndex].fanPath.empty()) {
+                            g_gpuList[gpuIndex].fanPath = sensorPath;
+                        }
+                    }
                     else if (sensorType == "Clock") {
                         if (sensorName.find("Core") != std::string::npos || g_gpuList[gpuIndex].clockPath.empty()) {
                             g_gpuList[gpuIndex].clockPath = sensorPath;
@@ -1345,6 +1382,8 @@ static bool InitLHWM()
             g_lhwmGpuVramTotalPath = g_gpuList[idx].vramTotalPath;
             g_lhwmGpuClockPath = g_gpuList[idx].clockPath;
             g_lhwmGpuClockMaxPath = g_gpuList[idx].clockMaxPath;
+            g_lhwmGpuPowerPath = g_gpuList[idx].powerPath;
+            g_lhwmGpuFanPath = g_gpuList[idx].fanPath;
             snprintf(g_gpuName, sizeof(g_gpuName), "%s", g_gpuList[idx].name);
         }
         
@@ -1382,10 +1421,17 @@ static void PollLHWMStats()
         if (!g_lhwmGpuVramTotalPath.empty()) {
             g_vramTotal = LHWM::GetSensorValue(g_lhwmGpuVramTotalPath) / 1024.0f;
         }
+        if (!g_lhwmGpuPowerPath.empty()) {
+            g_gpuPower = LHWM::GetSensorValue(g_lhwmGpuPowerPath);
+        }
+        if (!g_lhwmGpuFanPath.empty()) {
+            g_gpuFan = LHWM::GetSensorValue(g_lhwmGpuFanPath);
+        }
         
         // Clock sensors
         if (!g_lhwmCpuClockPath.empty()) {
             g_cpuClockMhz = LHWM::GetSensorValue(g_lhwmCpuClockPath);
+            if (g_cpuClockMhz > g_cpuClockMaxObserved) g_cpuClockMaxObserved = g_cpuClockMhz;
         }
         if (!g_lhwmCpuClockMaxPath.empty()) {
             g_cpuClockMaxMhz = LHWM::GetSensorValue(g_lhwmCpuClockMaxPath);
@@ -1417,6 +1463,8 @@ static void SelectGpu(int index)
     g_lhwmGpuVramTotalPath = g_gpuList[index].vramTotalPath;
     g_lhwmGpuClockPath = g_gpuList[index].clockPath;
     g_lhwmGpuClockMaxPath = g_gpuList[index].clockMaxPath;
+    g_lhwmGpuPowerPath = g_gpuList[index].powerPath;
+    g_lhwmGpuFanPath = g_gpuList[index].fanPath;
     
     snprintf(g_gpuName, sizeof(g_gpuName), "%s", g_gpuList[index].name);
 }
@@ -1893,8 +1941,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
         return 0;
     }
 
+    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+
     // ── Load saved configuration ──
     LoadConfig(g_Config);
+    bool isFirstBoot = (GetFileAttributesA(g_configPath) == INVALID_FILE_ATTRIBUTES);
 
     // ── Check for updates in background ──
     CheckForUpdatesAsync();
@@ -1952,22 +2003,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
         // If user declined, we still try to initialize - some features may work
     }
     
-    // Initialize LibreHardwareMonitor for GPU and CPU temperature monitoring
-    // Supports NVIDIA, AMD, and Intel GPUs
-    g_lhwmAvailable = InitLHWM();
-    
-    // Try WMI for CPU temperature as fallback
-    g_cpuTempAvailable = InitWMI();
-    if (g_cpuTempAvailable) {
-        // Test if we can actually get a temperature reading
-        float testTemp = QueryCpuTemperature();
-        g_cpuTempAvailable = (testTemp > 0.0f && testTemp < 150.0f);
-    }
-    
-    // LHWM provides CPU temp, so mark as available if we have it
-    if (g_lhwmAvailable && !g_lhwmCpuTempPath.empty()) {
-        g_cpuTempAvailable = true;
-    }
+    // Initialize hardware monitoring asynchronously (don't block startup)
+    std::thread([] {
+        bool lhwmOk = InitLHWM();
+        if (lhwmOk && !g_lhwmCpuTempPath.empty()) {
+            g_cpuTempAvailable = true;
+        } else {
+            g_cpuTempAvailable = InitWMI();
+            if (g_cpuTempAvailable) {
+                float testTemp = QueryCpuTemperature();
+                g_cpuTempAvailable = (testTemp > 0.0f && testTemp < 150.0f);
+            }
+        }
+        g_lhwmAvailable.store(lhwmOk, std::memory_order_release);
+    }).detach();
 
     // Show config window (unless auto-start is enabled)
     if (!g_Config.autoStart) {
@@ -2022,7 +2071,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
         }
         if (!g_Running) break;
 
-        if (g_Pending == CMD_START_OVERLAY) { g_Pending = CMD_NONE; SwitchToOverlay(); }
+        if (g_Pending == CMD_START_OVERLAY) { g_Pending = CMD_NONE; SwitchToOverlay(); if (isFirstBoot) { g_overlaySettingsOpen = true; g_overlaySettingsJustOpened = true; } }
         if (g_Pending == CMD_SHOW_SETTINGS) {
             g_Pending = CMD_NONE;
             if (g_Mode == MODE_OVERLAY) {
@@ -2161,6 +2210,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
                 ImGui::SameLine();
                 ImGui::TextColored(ImVec4(.45f,.45f,.50f,1), "(unsupported)");
             }
+            if (ImGui::Checkbox("  GPU Power", &g_Config.showGpuPower)) {
+                g_Config.preset = DetectPreset(g_Config);
+                SyncLegacyDisplayFlags(g_Config);
+            }
+            if (ImGui::Checkbox("  GPU Fan", &g_Config.showGpuFan)) {
+                g_Config.preset = DetectPreset(g_Config);
+                SyncLegacyDisplayFlags(g_Config);
+            }
             if (ImGui::Checkbox("  Show FPS lows/highs", &g_Config.showFpsLowHigh)) {
                 g_Config.preset = DetectPreset(g_Config);
                 SyncLegacyDisplayFlags(g_Config);
@@ -2169,10 +2226,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
                 g_Config.preset = DetectPreset(g_Config);
                 SyncLegacyDisplayFlags(g_Config);
             }
-            if (ImGui::Checkbox("  Show GPU frequency", &g_Config.showGpuFrequency)) {
-                g_Config.preset = DetectPreset(g_Config);
-                SyncLegacyDisplayFlags(g_Config);
-            }
+            // if (ImGui::Checkbox("  Show GPU frequency", &g_Config.showGpuFrequency)) {
+            //     g_Config.preset = DetectPreset(g_Config);
+            //     SyncLegacyDisplayFlags(g_Config);
+            // }
             if (ImGui::Checkbox("  GPU VRAM Usage", &g_Config.showVRAM)) {
                 g_Config.preset = DetectPreset(g_Config);
                 SyncLegacyDisplayFlags(g_Config);
@@ -2645,13 +2702,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
                     }
                     if (g_Config.showCpuFrequency && g_lhwmAvailable && g_cpuClockMhz > 0.0f) {
                         ImGui::SameLine(0, 8);
-                        DrawFrequency(g_overlayValueFont, valCol, g_cpuClockMhz, g_cpuClockMaxMhz);
+                        float maxMhz = (g_cpuClockMaxMhz > 0.0f) ? g_cpuClockMaxMhz : g_cpuClockMaxObserved;
+                        DrawFrequency(g_overlayValueFont, valCol, g_cpuClockMhz, maxMhz);
                     }
                     needSep = true;
                 }
 
                 // GPU
-                if (g_Config.showGpuUtil || g_Config.showGpuTemp || g_Config.showGpuHotspot || g_Config.showGpuFrequency || g_Config.showVRAM) {
+                if (g_Config.showGpuUtil || g_Config.showGpuTemp || g_Config.showGpuHotspot || g_Config.showVRAM || g_Config.showGpuPower || g_Config.showGpuFan) {
                     if (needSep) ImGui::SameLine(0, 12);
 
                     float hasGpuData = g_lhwmAvailable && g_gpuCount > 0;
@@ -2691,10 +2749,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
                                 TextColoredFont(g_overlayValueFont, valCol, "%.1f/%.0fG", dispVramUsed, dispVramTotal);
                             }
                         }
-                        // GPU frequency
+                        /* // GPU frequency (disabled)
                         if (g_Config.showGpuFrequency && g_gpuClockMhz > 0.0f) {
                             ImGui::SameLine(0, 8);
                             DrawFrequency(g_overlayValueFont, valCol, g_gpuClockMhz, g_gpuClockMaxMhz);
+                        } */
+                        // GPU power
+                        if (g_Config.showGpuPower && g_gpuPower > 0.0f) {
+                            ImGui::SameLine(0, 8);
+                            TextColoredFont(g_overlayValueFont, valCol, "%.0fW", g_gpuPower);
+                        }
+                        // GPU fan
+                        if (g_Config.showGpuFan && g_gpuFan > 0.0f) {
+                            ImGui::SameLine(0, 8);
+                            TextColoredFont(g_overlayValueFont, valCol, "%.0f RPM", g_gpuFan);
                         }
                     } else {
                         TextColoredFont(g_overlayValueFont, dimCol, "GPU N/A");
@@ -2771,6 +2839,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
                         g_Config.preset = DetectPreset(g_Config);
                         SyncLegacyDisplayFlags(g_Config);
                     }
+                    if (ImGui::Checkbox("GPU Power", &g_Config.showGpuPower)) {
+                        g_Config.preset = DetectPreset(g_Config);
+                        SyncLegacyDisplayFlags(g_Config);
+                    }
+                    if (ImGui::Checkbox("GPU Fan", &g_Config.showGpuFan)) {
+                        g_Config.preset = DetectPreset(g_Config);
+                        SyncLegacyDisplayFlags(g_Config);
+                    }
                     if (ImGui::Checkbox("Show FPS lows/highs", &g_Config.showFpsLowHigh)) {
                         g_Config.preset = DetectPreset(g_Config);
                         SyncLegacyDisplayFlags(g_Config);
@@ -2779,10 +2855,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
                         g_Config.preset = DetectPreset(g_Config);
                         SyncLegacyDisplayFlags(g_Config);
                     }
-                    if (ImGui::Checkbox("Show GPU frequency", &g_Config.showGpuFrequency)) {
-                        g_Config.preset = DetectPreset(g_Config);
-                        SyncLegacyDisplayFlags(g_Config);
-                    }
+                    // if (ImGui::Checkbox("Show GPU frequency", &g_Config.showGpuFrequency)) {
+                    //     g_Config.preset = DetectPreset(g_Config);
+                    //     SyncLegacyDisplayFlags(g_Config);
+                    // }
                     if (ImGui::Checkbox("GPU VRAM Usage", &g_Config.showVRAM)) {
                         g_Config.preset = DetectPreset(g_Config);
                         SyncLegacyDisplayFlags(g_Config);

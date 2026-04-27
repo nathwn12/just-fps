@@ -63,11 +63,9 @@ echo Build successful!
 echo.
 
 echo Copying required DLLs...
-for %%f in ("lhwm-wrapper.dll" "LibreHardwareMonitorLib.dll") do (
-    if exist "libs\lhwm\%%~f" (
-        copy /Y "libs\lhwm\%%~f" "build\" >nul
-        echo   - %%~f copied
-    )
+for %%f in ("libs\lhwm\*.dll") do (
+    copy /Y "%%~f" "build\" >nul
+    echo   - %%~nxf copied
 )
 
 REM Clean up intermediate files
@@ -84,10 +82,12 @@ echo ========================================
 echo.
 echo Required files in build folder:
 echo   - justFPS.exe
-echo   - lhwm-wrapper.dll (for LHWM support)
-echo   - LibreHardwareMonitorLib.dll (for LHWM support)
+echo   - lhwm-wrapper.dll
 echo.
 echo Run as Administrator for full functionality.
+echo.
+
+start "" "build\justFPS.exe"
 
 popd
 endlocal
