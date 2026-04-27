@@ -55,7 +55,7 @@
 #define IDM_UPDATE    1005
 
 // Current version
-#define APP_VERSION "v2.0.0"
+#define APP_VERSION "v2.1.0"
 
 // PawnIO installer resource ID (embedded executable)
 #define IDR_PAWNIO_SETUP 101
@@ -106,10 +106,22 @@ static const char* ETW_SESSION_NAME = "justFPS_ETW";
 // ═══════════════════════════════════════════════════════════════════════════
 // Configuration
 // ═══════════════════════════════════════════════════════════════════════════
+enum OverlayPreset {
+    JustFPS = 0,
+    FpsDetails = 1,
+    FpsDetailsCpuGpuUtil = 2,
+    FpsCpuGpuRamFullDetails = 3,
+    Custom = 4,
+};
+
 struct OverlayConfig {
     bool showFPS  = true;
     bool showCPU  = true;
     bool showGPU  = true;
+    bool showCpuUtil = true;
+    bool showCpuTemp = true;
+    bool showGpuUtil = true;
+    bool showGpuTemp = true;
     bool showGpuHotspot = true;
     bool showVRAM = false;     // GPU VRAM usage
     bool showRAM  = false;
@@ -119,6 +131,7 @@ struct OverlayConfig {
     bool showCpuFrequency = true;
     bool showGpuFrequency = true;
     int  position = 4;        // 0=TL 1=TR 2=BL 3=BR 4=TC 5=BC
+    float edgePadding = 16.0f; // distance from screen edge (px base, scaled by uiScale)
     float uiScale = 1.0f;     // overlay UI scale (1.0 = default)
     float textSaturation = 1.0f; // overlay text saturation/contrast
     int  toggleKey    = 0;
@@ -126,6 +139,7 @@ struct OverlayConfig {
     int  toggleMod    = 0;   // modifier flags for toggle key
     int  settingsMod  = 0;   // modifier flags for settings key
     int  selectedGpu  = 0;     // selected GPU index (0 = first GPU)
+    OverlayPreset preset = Custom;
 };
 
 
@@ -228,29 +242,184 @@ static void WriteIniFloat(const char* section, const char* key, float value)
     WritePrivateProfileStringA(section, key, buf, g_configPath);
 }
 
+static bool IniKeyExists(const char* section, const char* key)
+{
+    char buf[4];
+    return GetPrivateProfileStringA(section, key, nullptr, buf, sizeof(buf), g_configPath) > 0;
+}
+
+static void SyncLegacyDisplayFlags(OverlayConfig& cfg)
+{
+    cfg.showCPU = cfg.showCpuUtil || cfg.showCpuTemp;
+    cfg.showGPU = cfg.showGpuUtil || cfg.showGpuTemp;
+}
+
+static void ApplyPreset(OverlayConfig& cfg, OverlayPreset preset)
+{
+    cfg.preset = preset;
+
+    switch (preset) {
+    case JustFPS:
+        cfg.showFPS = true;
+        cfg.showFpsLowHigh = false;
+        cfg.showCpuUtil = false;
+        cfg.showCpuTemp = false;
+        cfg.showGpuUtil = false;
+        cfg.showGpuTemp = false;
+        cfg.showGpuHotspot = false;
+        cfg.showCpuFrequency = false;
+        cfg.showGpuFrequency = false;
+        cfg.showVRAM = false;
+        cfg.showRAM = false;
+        break;
+    case FpsDetails:
+        cfg.showFPS = true;
+        cfg.showFpsLowHigh = true;
+        cfg.showCpuUtil = false;
+        cfg.showCpuTemp = false;
+        cfg.showGpuUtil = false;
+        cfg.showGpuTemp = false;
+        cfg.showGpuHotspot = false;
+        cfg.showCpuFrequency = false;
+        cfg.showGpuFrequency = false;
+        cfg.showVRAM = false;
+        cfg.showRAM = false;
+        break;
+    case FpsDetailsCpuGpuUtil:
+        cfg.showFPS = true;
+        cfg.showFpsLowHigh = true;
+        cfg.showCpuUtil = true;
+        cfg.showCpuTemp = false;
+        cfg.showGpuUtil = true;
+        cfg.showGpuTemp = false;
+        cfg.showGpuHotspot = false;
+        cfg.showCpuFrequency = false;
+        cfg.showGpuFrequency = false;
+        cfg.showVRAM = false;
+        cfg.showRAM = false;
+        break;
+    case FpsCpuGpuRamFullDetails:
+        cfg.showFPS = true;
+        cfg.showFpsLowHigh = true;
+        cfg.showCpuUtil = true;
+        cfg.showCpuTemp = true;
+        cfg.showGpuUtil = true;
+        cfg.showGpuTemp = true;
+        cfg.showGpuHotspot = true;
+        cfg.showCpuFrequency = true;
+        cfg.showGpuFrequency = true;
+        cfg.showVRAM = true;
+        cfg.showRAM = true;
+        break;
+    case Custom:
+    default:
+        break;
+    }
+
+    SyncLegacyDisplayFlags(cfg);
+}
+
+static bool SameDisplayFlags(const OverlayConfig& a, const OverlayConfig& b)
+{
+    return a.showFPS == b.showFPS &&
+           a.showFpsLowHigh == b.showFpsLowHigh &&
+           a.showCpuUtil == b.showCpuUtil &&
+           a.showCpuTemp == b.showCpuTemp &&
+           a.showGpuUtil == b.showGpuUtil &&
+           a.showGpuTemp == b.showGpuTemp &&
+           a.showGpuHotspot == b.showGpuHotspot &&
+           a.showCpuFrequency == b.showCpuFrequency &&
+           a.showGpuFrequency == b.showGpuFrequency &&
+           a.showVRAM == b.showVRAM &&
+           a.showRAM == b.showRAM;
+}
+
+static OverlayPreset DetectPreset(const OverlayConfig& cfg)
+{
+    OverlayConfig expected = cfg;
+
+    ApplyPreset(expected, JustFPS);
+    if (SameDisplayFlags(cfg, expected)) return JustFPS;
+
+    ApplyPreset(expected, FpsDetails);
+    if (SameDisplayFlags(cfg, expected)) return FpsDetails;
+
+    ApplyPreset(expected, FpsDetailsCpuGpuUtil);
+    if (SameDisplayFlags(cfg, expected)) return FpsDetailsCpuGpuUtil;
+
+    ApplyPreset(expected, FpsCpuGpuRamFullDetails);
+    if (SameDisplayFlags(cfg, expected)) return FpsCpuGpuRamFullDetails;
+
+    return Custom;
+}
+
+static const char* GetPresetLabel(OverlayPreset preset) {
+    switch (preset) {
+    case OverlayPreset::JustFPS:               return "JUST FPS";
+    case OverlayPreset::FpsDetails:            return "FPS DETAILS";
+    case OverlayPreset::FpsDetailsCpuGpuUtil:  return "FPS DETAILS, CPU & GPU UTILIZATION";
+    case OverlayPreset::FpsCpuGpuRamFullDetails: return "FPS, CPU, GPU & RAM FULL DETAILS";
+    case OverlayPreset::Custom:                return "Custom";
+    default:                                   return "Unknown";
+    }
+}
+
 static void LoadConfig(OverlayConfig& cfg)
 {
     InitConfigPath();
-    
+
     // Check if config file exists
     DWORD attrib = GetFileAttributesA(g_configPath);
     if (attrib == INVALID_FILE_ATTRIBUTES) {
-        // No config file, use defaults
+        SyncLegacyDisplayFlags(cfg);
+        cfg.preset = DetectPreset(cfg);
         return;
     }
-    
+
     // Display settings
-    cfg.showFPS       = ReadIniInt("Display", "showFPS", 1) != 0;
-    cfg.showCPU       = ReadIniInt("Display", "showCPU", 1) != 0;
-    cfg.showGPU       = ReadIniInt("Display", "showGPU", 1) != 0;
-    cfg.showGpuHotspot = ReadIniInt("Display", "showGpuHotspot", 1) != 0;
-    cfg.showVRAM      = ReadIniInt("Display", "showVRAM", 0) != 0;
-    cfg.showRAM       = ReadIniInt("Display", "showRAM", 0) != 0;
-    cfg.showFpsLowHigh   = ReadIniInt("Display", "showFpsLowHigh", 1) != 0;
-    cfg.showCpuFrequency = ReadIniInt("Display", "showCpuFrequency", 1) != 0;
-    cfg.showGpuFrequency = ReadIniInt("Display", "showGpuFrequency", 1) != 0;
+    bool hasPreset = IniKeyExists("Display", "preset");
+    int presetValue = ReadIniInt("Display", "preset", static_cast<int>(Custom));
+
+    if (hasPreset && presetValue >= static_cast<int>(JustFPS) && presetValue <= static_cast<int>(Custom)) {
+        cfg.preset = static_cast<OverlayPreset>(presetValue);
+        if (cfg.preset != Custom) {
+            ApplyPreset(cfg, cfg.preset);
+        } else {
+            bool legacyShowCPU   = ReadIniInt("Display", "showCPU", 1) != 0;
+            bool legacyShowGPU   = ReadIniInt("Display", "showGPU", 1) != 0;
+            cfg.showFPS         = ReadIniInt("Display", "showFPS", 1) != 0;
+            cfg.showFpsLowHigh  = ReadIniInt("Display", "showFpsLowHigh", 1) != 0;
+            cfg.showCpuUtil     = IniKeyExists("Display", "showCpuUtil") ? ReadIniInt("Display", "showCpuUtil", 1) != 0 : legacyShowCPU;
+            cfg.showCpuTemp     = IniKeyExists("Display", "showCpuTemp") ? ReadIniInt("Display", "showCpuTemp", 1) != 0 : legacyShowCPU;
+            cfg.showGpuUtil     = IniKeyExists("Display", "showGpuUtil") ? ReadIniInt("Display", "showGpuUtil", 1) != 0 : legacyShowGPU;
+            cfg.showGpuTemp     = IniKeyExists("Display", "showGpuTemp") ? ReadIniInt("Display", "showGpuTemp", 1) != 0 : legacyShowGPU;
+            cfg.showGpuHotspot  = IniKeyExists("Display", "showGpuHotspot") ? ReadIniInt("Display", "showGpuHotspot", 1) != 0 : legacyShowGPU;
+            cfg.showCpuFrequency = IniKeyExists("Display", "showCpuFrequency") ? ReadIniInt("Display", "showCpuFrequency", 1) != 0 : legacyShowCPU;
+            cfg.showGpuFrequency = IniKeyExists("Display", "showGpuFrequency") ? ReadIniInt("Display", "showGpuFrequency", 1) != 0 : legacyShowGPU;
+            cfg.showVRAM        = IniKeyExists("Display", "showVRAM") ? ReadIniInt("Display", "showVRAM", 0) != 0 : legacyShowGPU;
+            cfg.showRAM         = IniKeyExists("Display", "showRAM") ? ReadIniInt("Display", "showRAM", 0) != 0 : false;
+        }
+    } else {
+        cfg.showFPS         = ReadIniInt("Display", "showFPS", 1) != 0;
+        bool legacyShowCPU  = ReadIniInt("Display", "showCPU", 1) != 0;
+        bool legacyShowGPU  = ReadIniInt("Display", "showGPU", 1) != 0;
+        cfg.showCpuUtil     = legacyShowCPU;
+        cfg.showCpuTemp     = legacyShowCPU;
+        cfg.showGpuUtil     = legacyShowGPU;
+        cfg.showGpuTemp     = legacyShowGPU;
+        cfg.showGpuHotspot  = ReadIniInt("Display", "showGpuHotspot", 1) != 0;
+        cfg.showVRAM        = ReadIniInt("Display", "showVRAM", 0) != 0;
+        cfg.showRAM         = ReadIniInt("Display", "showRAM", 0) != 0;
+        cfg.showFpsLowHigh  = ReadIniInt("Display", "showFpsLowHigh", 1) != 0;
+        cfg.showCpuFrequency = ReadIniInt("Display", "showCpuFrequency", 1) != 0;
+        cfg.showGpuFrequency = ReadIniInt("Display", "showGpuFrequency", 1) != 0;
+        SyncLegacyDisplayFlags(cfg);
+        cfg.preset = DetectPreset(cfg);
+    }
+
     cfg.autoStart     = ReadIniInt("Layout", "autoStart", 1) != 0;
     cfg.position      = ReadIniInt("Layout", "position", 4);
+    cfg.edgePadding   = ReadIniFloat("Layout", "edgePadding", 16.0f);
     cfg.uiScale       = ReadIniFloat("Layout", "uiScale", 1.0f);
     cfg.textSaturation = ReadIniFloat("Layout", "textSaturation", 1.0f);
 
@@ -270,6 +439,8 @@ static void LoadConfig(OverlayConfig& cfg)
     if (cfg.textSaturation < 0.00f) cfg.textSaturation = 0.00f;
     if (cfg.textSaturation > 1.40f) cfg.textSaturation = 1.40f;
     if (cfg.selectedGpu < 0) cfg.selectedGpu = 0;
+
+    SyncLegacyDisplayFlags(cfg);
 }
 
 // Check if welcome message has been shown (separate from config)
@@ -315,9 +486,14 @@ static void SaveConfig(const OverlayConfig& cfg)
     InitConfigPath();
     
     // Display settings
+    WriteIniInt("Display", "preset", static_cast<int>(cfg.preset));
     WriteIniInt("Display", "showFPS", cfg.showFPS ? 1 : 0);
     WriteIniInt("Display", "showCPU", cfg.showCPU ? 1 : 0);
     WriteIniInt("Display", "showGPU", cfg.showGPU ? 1 : 0);
+    WriteIniInt("Display", "showCpuUtil", cfg.showCpuUtil ? 1 : 0);
+    WriteIniInt("Display", "showCpuTemp", cfg.showCpuTemp ? 1 : 0);
+    WriteIniInt("Display", "showGpuUtil", cfg.showGpuUtil ? 1 : 0);
+    WriteIniInt("Display", "showGpuTemp", cfg.showGpuTemp ? 1 : 0);
     WriteIniInt("Display", "showGpuHotspot", cfg.showGpuHotspot ? 1 : 0);
     WriteIniInt("Display", "showVRAM", cfg.showVRAM ? 1 : 0);
     WriteIniInt("Display", "showRAM", cfg.showRAM ? 1 : 0);
@@ -329,6 +505,7 @@ static void SaveConfig(const OverlayConfig& cfg)
     WriteIniInt("Layout", "useFahrenheit", cfg.useFahrenheit ? 1 : 0);
     WriteIniInt("Layout", "autoStart", cfg.autoStart ? 1 : 0);
     WriteIniInt("Layout", "position", cfg.position);
+    WriteIniFloat("Layout", "edgePadding", cfg.edgePadding);
     WriteIniFloat("Layout", "uiScale", cfg.uiScale);
     WriteIniFloat("Layout", "textSaturation", cfg.textSaturation);
 
@@ -1926,35 +2103,88 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
 
             ImGui::Spacing(); ImGui::Separator();
 
+            // ── PRESET ──
+            ImGui::Spacing(); ImGui::Spacing();
+            ImGui::TextColored(ImVec4(.55f,.70f,.95f,1), "PRESET");
+            ImGui::Spacing();
+            if (ImGui::BeginCombo("##preset", GetPresetLabel(g_Config.preset))) {
+                for (int i = (int)OverlayPreset::JustFPS; i <= (int)OverlayPreset::Custom; ++i) {
+                    OverlayPreset preset = (OverlayPreset)i;
+                    bool selected = g_Config.preset == preset;
+                    if (ImGui::Selectable(GetPresetLabel(preset), selected)) {
+                        ApplyPreset(g_Config, preset);
+                    }
+                    if (selected) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::Spacing(); ImGui::Separator();
+            ImGui::Spacing();
+
             // ── DISPLAY ──
             ImGui::Spacing(); ImGui::Spacing();
             ImGui::TextColored(ImVec4(.55f,.70f,.95f,1), "DISPLAY");
             ImGui::Spacing();
-            ImGui::Checkbox("  FPS Counter (game)", &g_Config.showFPS);
+            if (ImGui::Checkbox("  FPS Counter (game)", &g_Config.showFPS)) {
+                g_Config.preset = DetectPreset(g_Config);
+                SyncLegacyDisplayFlags(g_Config);
+            }
             if (!g_isAdmin) {
                 ImGui::SameLine();
                 ImGui::TextColored(ImVec4(.9f,.4f,.2f,1), "(needs admin!)");
             }
-            ImGui::Checkbox("  CPU Usage & Temp", &g_Config.showCPU);
-            ImGui::Checkbox("  GPU Usage & Temp", &g_Config.showGPU);
+            if (ImGui::Checkbox("  CPU Utilization", &g_Config.showCpuUtil)) {
+                g_Config.preset = DetectPreset(g_Config);
+                SyncLegacyDisplayFlags(g_Config);
+            }
+            if (ImGui::Checkbox("  CPU Temperature", &g_Config.showCpuTemp)) {
+                g_Config.preset = DetectPreset(g_Config);
+                SyncLegacyDisplayFlags(g_Config);
+            }
+            if (ImGui::Checkbox("  GPU Utilization", &g_Config.showGpuUtil)) {
+                g_Config.preset = DetectPreset(g_Config);
+                SyncLegacyDisplayFlags(g_Config);
+            }
+            if (ImGui::Checkbox("  GPU Temperature", &g_Config.showGpuTemp)) {
+                g_Config.preset = DetectPreset(g_Config);
+                SyncLegacyDisplayFlags(g_Config);
+            }
             if (!g_lhwmAvailable || g_gpuCount == 0) {
                 ImGui::SameLine();
                 ImGui::TextColored(ImVec4(.9f,.4f,.2f,1), "(unavailable)");
             }
-            ImGui::Checkbox("  GPU Hotspot Temp", &g_Config.showGpuHotspot);
+            if (ImGui::Checkbox("  GPU Hotspot Temp", &g_Config.showGpuHotspot)) {
+                g_Config.preset = DetectPreset(g_Config);
+                SyncLegacyDisplayFlags(g_Config);
+            }
             if (!g_lhwmAvailable || g_gpuCount == 0 || g_lhwmGpuHotspotPath.empty()) {
                 ImGui::SameLine();
                 ImGui::TextColored(ImVec4(.45f,.45f,.50f,1), "(unsupported)");
             }
-            ImGui::Checkbox("  Show FPS lows/highs", &g_Config.showFpsLowHigh);
-            ImGui::Checkbox("  Show CPU frequency", &g_Config.showCpuFrequency);
-            ImGui::Checkbox("  Show GPU frequency", &g_Config.showGpuFrequency);
-            ImGui::Checkbox("  GPU VRAM Usage", &g_Config.showVRAM);
+            if (ImGui::Checkbox("  Show FPS lows/highs", &g_Config.showFpsLowHigh)) {
+                g_Config.preset = DetectPreset(g_Config);
+                SyncLegacyDisplayFlags(g_Config);
+            }
+            if (ImGui::Checkbox("  Show CPU frequency", &g_Config.showCpuFrequency)) {
+                g_Config.preset = DetectPreset(g_Config);
+                SyncLegacyDisplayFlags(g_Config);
+            }
+            if (ImGui::Checkbox("  Show GPU frequency", &g_Config.showGpuFrequency)) {
+                g_Config.preset = DetectPreset(g_Config);
+                SyncLegacyDisplayFlags(g_Config);
+            }
+            if (ImGui::Checkbox("  GPU VRAM Usage", &g_Config.showVRAM)) {
+                g_Config.preset = DetectPreset(g_Config);
+                SyncLegacyDisplayFlags(g_Config);
+            }
             if (!g_lhwmAvailable || g_gpuCount == 0) {
                 ImGui::SameLine();
                 ImGui::TextColored(ImVec4(.9f,.4f,.2f,1), "(unavailable)");
             }
-            ImGui::Checkbox("  RAM Usage", &g_Config.showRAM);
+            if (ImGui::Checkbox("  RAM Usage", &g_Config.showRAM)) {
+                g_Config.preset = DetectPreset(g_Config);
+                SyncLegacyDisplayFlags(g_Config);
+            }
 
             // ── GPU SELECTION ──
             if (g_gpuCount > 0) {
@@ -2011,6 +2241,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
             ImGui::TextColored(ImVec4(.45f,.45f,.50f,1), "Text Saturation");
             ImGui::SetNextItemWidth(-1);
             ImGui::SliderFloat("##textsat", &g_Config.textSaturation, 0.00f, 1.40f, "");
+            ImGui::TextColored(ImVec4(.45f,.45f,.50f,1), "Edge Padding");
+            ImGui::SetNextItemWidth(-1);
+            ImGui::SliderFloat("##edgepad", &g_Config.edgePadding, 0.0f, 100.0f, "%.0f px");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Distance from the screen edge (0-100 px)");
             
             // ── TEMPERATURE UNIT ──
             ImGui::Spacing(); ImGui::Spacing();
@@ -2290,7 +2525,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
             ImGui::NewFrame();
 
             // Position: always use the selected fixed preset.
-            float margin = 16.0f * g_Config.uiScale;
+            float margin = g_Config.edgePadding * g_Config.uiScale;
             MONITORINFO mi = { sizeof(mi) };
             HMONITOR mon = MonitorFromWindow(g_hwnd, MONITOR_DEFAULTTOPRIMARY);
             GetMonitorInfo(mon, &mi);
@@ -2329,7 +2564,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
 
             // Steam-like colors: muted colored labels, soft gray values.
             const float textSat = g_Config.textSaturation;
-            const ImVec4 fpsCol = AdjustTextSaturation(ImVec4(0.93f, 0.50f, 0.50f, 1.0f), textSat); // Salmon
+            const ImVec4 fpsCol = (g_Config.preset == OverlayPreset::JustFPS)
+                ? ImVec4(0.20f, 0.76f, 0.28f, 1.0f)
+                : AdjustTextSaturation(ImVec4(0.93f, 0.50f, 0.50f, 1.0f), textSat);
             const ImVec4 cpuCol = AdjustTextSaturation(ImVec4(0.84f, 0.88f, 0.33f, 1.0f), textSat); // Yellow-green
             const ImVec4 gpuCol = AdjustTextSaturation(ImVec4(0.20f, 0.76f, 0.28f, 1.0f), textSat); // Steam green
             const ImVec4 memCol = AdjustTextSaturation(ImVec4(0.78f, 0.55f, 0.96f, 1.0f), textSat); // Lavender
@@ -2394,12 +2631,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
                 }
 
                 // CPU
-                if (g_Config.showCPU) {
+                if (g_Config.showCpuUtil || g_Config.showCpuTemp || g_Config.showCpuFrequency) {
                     if (needSep) ImGui::SameLine(0, 12);
                     TextColoredFont(g_overlayLabelFont, cpuCol, "CPU");
                     ImGui::SameLine(0, 4);
-                    TextColoredFont(g_overlayValueFont, valCol, "%.0f%%", cpuUsage);
-                    if (g_cpuTempAvailable && g_cpuTemp > 0) {
+                    if (g_Config.showCpuUtil) {
+                        TextColoredFont(g_overlayValueFont, valCol, "%.0f%%", cpuUsage);
+                    }
+                    if (g_Config.showCpuTemp && g_cpuTempAvailable && g_cpuTemp > 0) {
                         ImGui::SameLine(0, 6);
                         float dispTemp = ToDisplayTemp(g_cpuTemp, g_Config.useFahrenheit);
                         TextColoredFont(g_overlayValueFont, valCol, "%.0f\xC2\xB0%s", dispTemp, g_Config.useFahrenheit ? "F" : "C");
@@ -2412,27 +2651,38 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
                 }
 
                 // GPU
-                if (g_Config.showGPU) {
+                if (g_Config.showGpuUtil || g_Config.showGpuTemp || g_Config.showGpuHotspot || g_Config.showGpuFrequency || g_Config.showVRAM) {
                     if (needSep) ImGui::SameLine(0, 12);
 
-                    float dispGpuLoad = g_gpuUsage;
-                    float dispGpuTemp = g_gpuTemp;
-                    bool hasGpuData = g_lhwmAvailable && g_gpuCount > 0;
+                    float hasGpuData = g_lhwmAvailable && g_gpuCount > 0;
 
                     if (hasGpuData) {
-                        TextColoredFont(g_overlayLabelFont, gpuCol, "GPU");
-                        ImGui::SameLine(0, 4);
-                        TextColoredFont(g_overlayValueFont, valCol, "%.0f%%", dispGpuLoad);
-                        if (dispGpuTemp > 0) {
+                        bool showedGpuLabel = false;
+                        // GPU util (with label)
+                        if (g_Config.showGpuUtil) {
+                            TextColoredFont(g_overlayLabelFont, gpuCol, "GPU");
+                            showedGpuLabel = true;
+                            ImGui::SameLine(0, 4);
+                            TextColoredFont(g_overlayValueFont, valCol, "%.0f%%", g_gpuUsage);
+                        }
+                        // GPU temp (label only if not shown yet)
+                        if (g_Config.showGpuTemp && g_gpuTemp > 0) {
+                            if (!showedGpuLabel) {
+                                TextColoredFont(g_overlayLabelFont, gpuCol, "GPU");
+                                showedGpuLabel = true;
+                                ImGui::SameLine(0, 4);
+                            }
+                            float dispTemp = ToDisplayTemp(g_gpuTemp, g_Config.useFahrenheit);
                             ImGui::SameLine(0, 6);
-                            float dispTemp = ToDisplayTemp(dispGpuTemp, g_Config.useFahrenheit);
                             TextColoredFont(g_overlayValueFont, valCol, "%.0f\xC2\xB0%s", dispTemp, g_Config.useFahrenheit ? "F" : "C");
                         }
+                        // GPU hotspot
                         if (g_Config.showGpuHotspot && !g_lhwmGpuHotspotPath.empty() && g_gpuHotspotTemp > 0) {
-                            ImGui::SameLine(0, 6);
                             float dispHotspot = ToDisplayTemp(g_gpuHotspotTemp, g_Config.useFahrenheit);
+                            ImGui::SameLine(0, 6);
                             TextColoredFont(g_overlayValueFont, valCol, "%.0f\xC2\xB0%s", dispHotspot, g_Config.useFahrenheit ? "F" : "C");
                         }
+                        // VRAM
                         if (g_Config.showVRAM) {
                             float dispVramUsed = g_vramUsed;
                             float dispVramTotal = g_vramTotal;
@@ -2441,7 +2691,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
                                 TextColoredFont(g_overlayValueFont, valCol, "%.1f/%.0fG", dispVramUsed, dispVramTotal);
                             }
                         }
-                        if (g_Config.showGpuFrequency && hasGpuData && g_gpuClockMhz > 0.0f) {
+                        // GPU frequency
+                        if (g_Config.showGpuFrequency && g_gpuClockMhz > 0.0f) {
                             ImGui::SameLine(0, 8);
                             DrawFrequency(g_overlayValueFont, valCol, g_gpuClockMhz, g_gpuClockMaxMhz);
                         }
@@ -2480,17 +2731,66 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
                     ImGui::TextColored(ImVec4(.35f,.78f,1,1), "justFPS Settings");
                     ImGui::Separator();
 
+                    ImGui::TextColored(ImVec4(.55f,.70f,.95f,1), "PRESET");
+                    ImGui::Spacing();
+                    if (ImGui::BeginCombo("##ovl_preset", GetPresetLabel(g_Config.preset))) {
+                        for (int i = (int)OverlayPreset::JustFPS; i <= (int)OverlayPreset::Custom; ++i) {
+                            OverlayPreset preset = (OverlayPreset)i;
+                            bool selected = g_Config.preset == preset;
+                            if (ImGui::Selectable(GetPresetLabel(preset), selected)) {
+                                ApplyPreset(g_Config, preset);
+                            }
+                            if (selected) ImGui::SetItemDefaultFocus();
+                        }
+                        ImGui::EndCombo();
+                    }
+                    ImGui::Spacing(); ImGui::Separator();
                     ImGui::Spacing();
                     ImGui::TextColored(ImVec4(.55f,.70f,.95f,1), "DISPLAY");
-                    ImGui::Checkbox("FPS Counter (game)", &g_Config.showFPS);
-                    ImGui::Checkbox("CPU Usage & Temp", &g_Config.showCPU);
-                    ImGui::Checkbox("GPU Usage & Temp", &g_Config.showGPU);
-                    ImGui::Checkbox("GPU Hotspot Temp", &g_Config.showGpuHotspot);
-                    ImGui::Checkbox("Show FPS lows/highs", &g_Config.showFpsLowHigh);
-                    ImGui::Checkbox("Show CPU frequency", &g_Config.showCpuFrequency);
-                    ImGui::Checkbox("Show GPU frequency", &g_Config.showGpuFrequency);
-                    ImGui::Checkbox("GPU VRAM Usage", &g_Config.showVRAM);
-                    ImGui::Checkbox("RAM Usage", &g_Config.showRAM);
+                    if (ImGui::Checkbox("FPS Counter (game)", &g_Config.showFPS)) {
+                        g_Config.preset = DetectPreset(g_Config);
+                        SyncLegacyDisplayFlags(g_Config);
+                    }
+                    if (ImGui::Checkbox("CPU Utilization", &g_Config.showCpuUtil)) {
+                        g_Config.preset = DetectPreset(g_Config);
+                        SyncLegacyDisplayFlags(g_Config);
+                    }
+                    if (ImGui::Checkbox("CPU Temperature", &g_Config.showCpuTemp)) {
+                        g_Config.preset = DetectPreset(g_Config);
+                        SyncLegacyDisplayFlags(g_Config);
+                    }
+                    if (ImGui::Checkbox("GPU Utilization", &g_Config.showGpuUtil)) {
+                        g_Config.preset = DetectPreset(g_Config);
+                        SyncLegacyDisplayFlags(g_Config);
+                    }
+                    if (ImGui::Checkbox("GPU Temperature", &g_Config.showGpuTemp)) {
+                        g_Config.preset = DetectPreset(g_Config);
+                        SyncLegacyDisplayFlags(g_Config);
+                    }
+                    if (ImGui::Checkbox("GPU Hotspot Temp", &g_Config.showGpuHotspot)) {
+                        g_Config.preset = DetectPreset(g_Config);
+                        SyncLegacyDisplayFlags(g_Config);
+                    }
+                    if (ImGui::Checkbox("Show FPS lows/highs", &g_Config.showFpsLowHigh)) {
+                        g_Config.preset = DetectPreset(g_Config);
+                        SyncLegacyDisplayFlags(g_Config);
+                    }
+                    if (ImGui::Checkbox("Show CPU frequency", &g_Config.showCpuFrequency)) {
+                        g_Config.preset = DetectPreset(g_Config);
+                        SyncLegacyDisplayFlags(g_Config);
+                    }
+                    if (ImGui::Checkbox("Show GPU frequency", &g_Config.showGpuFrequency)) {
+                        g_Config.preset = DetectPreset(g_Config);
+                        SyncLegacyDisplayFlags(g_Config);
+                    }
+                    if (ImGui::Checkbox("GPU VRAM Usage", &g_Config.showVRAM)) {
+                        g_Config.preset = DetectPreset(g_Config);
+                        SyncLegacyDisplayFlags(g_Config);
+                    }
+                    if (ImGui::Checkbox("RAM Usage", &g_Config.showRAM)) {
+                        g_Config.preset = DetectPreset(g_Config);
+                        SyncLegacyDisplayFlags(g_Config);
+                    }
 
                     if (g_gpuCount > 0) {
                         ImGui::Spacing();
@@ -2530,6 +2830,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
                     ImGui::Text("Text Saturation");
                     ImGui::SetNextItemWidth(-1);
                     ImGui::SliderFloat("##ovl_textsat", &g_Config.textSaturation, 0.00f, 1.40f, "");
+                    ImGui::Text("Edge Padding");
+                    ImGui::SetNextItemWidth(-1);
+                    ImGui::SliderFloat("##ovl_edgepad", &g_Config.edgePadding, 0.0f, 100.0f, "%.0f px");
                     ImGui::Spacing();
                     ImGui::TextColored(ImVec4(.55f,.70f,.95f,1), "TEMPERATURE");
                     int tempUnit = g_Config.useFahrenheit ? 1 : 0;

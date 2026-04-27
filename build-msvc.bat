@@ -22,6 +22,28 @@ if not defined VCVARS (
 echo Setting up Visual Studio environment...
 call "%VCVARS%"
 
+echo Cleaning build directory...
+if exist "build\justFPS.exe" (
+    del /F /Q "build\justFPS.exe" 2>nul
+    if exist "build\justFPS.exe" (
+        echo   - justFPS.exe locked, killing process...
+        taskkill /f /im justFPS.exe 2>nul
+        timeout /t 1 /nobreak >nul
+        del /F /Q "build\justFPS.exe" 2>nul
+        if exist "build\justFPS.exe" (
+            echo   - still locked, will overwrite during build
+        ) else (
+            echo   - justFPS.exe removed
+        )
+    ) else (
+        echo   - justFPS.exe removed
+    )
+)
+if exist "build" (
+    del /F /Q "build\*.*" 2>nul
+    for /D %%d in ("build\*") do rmdir /S /Q "%%d" 2>nul
+    echo   - build\ cleaned
+)
 echo.
 echo Building justFPS (Release x64)...
 echo.
