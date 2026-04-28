@@ -1865,7 +1865,8 @@ void SwitchToOverlay()
     ShutdownBackends();
     DestroyWindow(g_hwnd);
 
-    int w = GetSystemMetrics(SM_CXSCREEN), h = GetSystemMetrics(SM_CYSCREEN);
+    RECT work;
+    SystemParametersInfo(SPI_GETWORKAREA, 0, &work, 0);
     
     // Always start click-through - we toggle it when CTRL is held
     DWORD exStyle = WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE;
@@ -1873,7 +1874,9 @@ void SwitchToOverlay()
     g_hwnd = CreateWindowEx(
         exStyle,
         "justFPS", "justFPS", WS_POPUP,
-        0, 0, w, h, nullptr, nullptr, g_hInstance, nullptr);
+        work.left, work.top,
+        work.right - work.left, work.bottom - work.top,
+        nullptr, nullptr, g_hInstance, nullptr);
 
     SetLayeredWindowAttributes(g_hwnd, RGB(0,0,0), 255, LWA_ALPHA);
     MARGINS m = { -1 }; DwmExtendFrameIntoClientArea(g_hwnd, &m);
@@ -2655,6 +2658,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
                 va_end(args);
                 if (font) ImGui::PopFont();
             };
+
+            auto DrawFpsRow = [&](const ImVec4& valueColor, float fpsValue, float lowValue, float highValue, bool showRange) {
+                TextColoredFont(g_overlayLabelFont, fpsCol, "FPS");
+                ImGui::SameLine(0, 4);
+                TextColoredFont(g_overlayValueFont, valueColor, "%.0f", fpsValue);
+                if (showRange) {
+                    ImGui::SameLine(0, 6);
+                    TextColoredFont(g_overlayValueFont, valueColor, "\xE2\x86\x93%.0f", lowValue);
+                    ImGui::SameLine(0, 6);
+                    TextColoredFont(g_overlayValueFont, valueColor, "\xE2\x86\x91%.0f", highValue);
+                }
+            };
             
             // ── Draw glowing border when CTRL is held ──
             if (ctrlHeld) {
@@ -2688,19 +2703,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
                 if (g_Config.showFPS) {
                     if (needSep) ImGui::SameLine(0, 10);
                     if (g_etwAvailable && gameFps > 0) {
-                        TextColoredFont(g_overlayLabelFont, fpsCol, "FPS");
-                        ImGui::SameLine(0, 4);
-                        TextColoredFont(g_overlayValueFont, valCol, "%.0f", gameFps);
-                        if (g_Config.showFpsLowHigh && g_fpsRangeInitialized) {
-                            ImGui::SameLine(0, 6);
-                            TextColoredFont(g_overlayValueFont, valCol, "\xE2\x86\x93%.0f", g_fpsLow);
-                            ImGui::SameLine(0, 6);
-                            TextColoredFont(g_overlayValueFont, valCol, "\xE2\x86\x91%.0f", g_fpsHigh);
-                        }
+                        DrawFpsRow(valCol, gameFps, g_fpsLow, g_fpsHigh, g_Config.showFpsLowHigh && g_fpsRangeInitialized);
                     } else {
-                        TextColoredFont(g_overlayLabelFont, fpsCol, "FPS");
-                        ImGui::SameLine(0, 4);
-                        TextColoredFont(g_overlayValueFont, dimCol, "---");
+                        DrawFpsRow(dimCol, 0.0f, 0.0f, 0.0f, g_Config.showFpsLowHigh);
                     }
                     needSep = true;
                 }
