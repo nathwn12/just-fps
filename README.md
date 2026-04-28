@@ -72,8 +72,8 @@ Grab the latest from the [Releases](../../releases) page, or build from source (
 | Action | How |
 |--------|-----|
 | Right-click menu | Hold **CTRL** + right-click over the overlay |
-| Toggle visibility | Your hotkey (default: **`Ctrl + /`**) |
-| Toggle settings | Your hotkey (default: **`Ctrl + *`**) |
+| Toggle visibility | Your hotkey (default: **`F12`**) |
+| Toggle settings | Your hotkey (default: **unset** — set one to enable) |
 
 > **Note:** CTRL only works while the mouse is over the overlay, so it won't interfere with other apps.
 
@@ -169,6 +169,31 @@ just-fps/
 ## License
 
 GNU General Public License v3.0 — see [LICENSE.txt](LICENSE.txt).
+
+### Attribution
+
+This project is a **derivative work** based on [fps-overlay](https://github.com/aneeskhan47/fps-overlay) by [aneeskhan47](https://github.com/aneeskhan47). The original project is also licensed under GPLv3.
+
+### Modifications
+
+The following changes have been made relative to the original [fps-overlay](https://github.com/aneeskhan47/fps-overlay) (v1.5.0-beta). All original features (FPS, CPU, GPU, VRAM, RAM, frequency monitoring, Steam-style layout, PawnIO driver install, welcome dialog, system tray) are preserved.
+
+| Change | Description |
+|--------|-------------|
+| **Rebranded** | Renamed from *FPS Overlay* to *justFPS*; executable renamed from `overlay.exe` to `justFPS.exe` |
+| **Overlay presets** | Added preset system (`JustFPS`, `FpsDetails`, `FpsDetailsCpuGpuUtil`, `FpsCpuGpuRamFullDetails`, `Custom`) with batch toggling of per-stat display flags |
+| **Granular per-stat flags** | Split combined showCPU/showGPU into individual toggles: CPU util, CPU temp, CPU frequency, GPU util, GPU temp, GPU hotspot, GPU power, GPU fan, GPU frequency |
+| **Added GPU stats** | Added GPU hotspot temperature, GPU power draw (watts), GPU fan speed (RPM) — not present in original |
+| **FPS lows/highs** | Added display of minimum and maximum recorded FPS |
+| **Overlay frequency display** | Replaced sparkline-based clock graphs with text-only current/max GHz display |
+| **Config UI** | Redesigned settings window with preset-driven layout and grouped checkboxes |
+| **Hotkey system** | Switched from Insert/End defaults to F12 (toggle) and unset (settings); added modifier key support (Ctrl/Alt/Shift combos); configurable via overlay context menu |
+| **Auto-start** | Added option to skip config and launch overlay immediately |
+| **Position presets** | Replaced 4-corner positions (TL/TR/BL/BR) with 6 named snaps (top-left, top-center, top-right, bottom-left, bottom-center, bottom-right) |
+| **Overlay mode state machine** | Added `MODE_CONFIG` / `MODE_OVERLAY` state machine with `g_Pending` command queue for clean mode switching |
+| **Backward compatibility** | Added `SyncLegacyDisplayFlags()` for seamless migration from old coarse showCPU/showGPU config |
+| **Build config** | Renamed solution and project files (`FPSOverlay.sln/vcxproj` → `justFPS.sln/vcxproj`); updated resource metadata |
+| **Dropped dependency** | Removed `imgui_internal.h` include |
 
 ## Contributing
 
