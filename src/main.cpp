@@ -73,7 +73,7 @@
 #define IDM_UPDATE    1005
 
 // Current version
-#define APP_VERSION "v2.2.0"
+#define APP_VERSION "v2.2.1"
 
 // PawnIO installer resource ID (embedded executable)
 #define IDR_PAWNIO_SETUP 101
@@ -722,6 +722,7 @@ static float g_gpuClockMaxMhz = 0.0f;
 static TRACEHANDLE      g_etwSession = 0;
 static TRACEHANDLE      g_etwTrace   = 0;
 static std::thread      g_etwThread;
+static std::atomic<bool>  g_etwThreadStarted{false};
 static std::atomic<bool>  g_etwRunning{false};
 static std::atomic<float> g_gameFps{0.0f};
 static float g_fpsLow = 0.0f;
@@ -1673,11 +1674,12 @@ static bool StartEtwSession()
         return false;
     }
 
-    g_etwRunning.store(true);
     g_etwThread = std::thread([]() {
         TRACEHANDLE h = g_etwTrace;
         ProcessTrace(&h, 1, nullptr, nullptr);
     });
+    g_etwThreadStarted.store(true);
+    g_etwRunning.store(true);
 
     return true;
 }
@@ -1691,8 +1693,18 @@ static void StopEtwSession()
         CloseTrace(g_etwTrace);
         g_etwTrace = 0;
     }
-    if (g_etwThread.joinable())
-        g_etwThread.join();
+    if (g_etwThreadStarted.load()) {
+        if (g_etwThread.joinable()) {
+            auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
+            while (g_etwThread.joinable()) {
+                if (std::chrono::steady_clock::now() >= deadline) {
+                    g_etwThread.detach();
+                    break;
+                }
+                Sleep(1);
+            }
+        }
+    }
 
     struct { EVENT_TRACE_PROPERTIES p; char name[256]; } buf;
     ZeroMemory(&buf, sizeof(buf));
@@ -1795,7 +1807,7 @@ bool CreateDeviceD3D(HWND hWnd)
     sd.BufferCount = 2;
     sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     sd.BufferDesc.RefreshRate.Denominator = 1;
-    sd.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+    sd.Flags = 0;
     sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     sd.OutputWindow = hWnd;
     sd.SampleDesc.Count = 1;
@@ -1880,13 +1892,15 @@ void SwitchToOverlay()
 
     SetLayeredWindowAttributes(g_hwnd, RGB(0,0,0), 255, LWA_ALPHA);
     MARGINS m = { -1 }; DwmExtendFrameIntoClientArea(g_hwnd, &m);
+    BOOL disableTransitions = TRUE;
+    DwmSetWindowAttribute(g_hwnd, DWMWA_TRANSITIONS_FORCEDISABLED, &disableTransitions, sizeof(disableTransitions));
 
     InitBackends();
     ShowWindow(g_hwnd, SW_SHOWNOACTIVATE);
     AddTrayIcon();
 
-    // Start ETW for real game FPS
-    g_etwAvailable = StartEtwSession();
+    // Start ETW in background to avoid blocking overlay startup
+    std::thread([]() { g_etwAvailable = StartEtwSession(); }).detach();
 
     g_Mode       = MODE_OVERLAY;
     g_OvlVisible = true;
@@ -1946,7 +1960,7 @@ static void Present(float r, float g, float b, float a)
     g_pd3dDeviceContext->OMSetRenderTargets(1, &g_pRenderTargetView, nullptr);
     g_pd3dDeviceContext->ClearRenderTargetView(g_pRenderTargetView, c);
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-    g_pSwapChain->Present(1, 0);
+    g_pSwapChain->Present(0, 0);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2425,14 +2439,22 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
                     { g_Pending = CMD_SHOW_SETTINGS; break; }
             }
 
-            // ── Show/Hide window based on visibility flag ──
-            static bool wasVisible = true;
-            if (g_OvlVisible != wasVisible) {
-                ShowWindow(g_hwnd, g_OvlVisible ? SW_SHOWNA : SW_HIDE);
-                wasVisible = g_OvlVisible;
+            // ── Show/Hide window via DWM cloak (faster than alpha toggling) ──
+            static bool wasCloaked = true;
+            bool cloak = !g_OvlVisible;
+            if (cloak != wasCloaked) {
+                DwmSetWindowAttribute(g_hwnd, DWMWA_CLOAK, &cloak, sizeof(cloak));
+                wasCloaked = cloak;
             }
 
-            if (!g_OvlVisible) { Sleep(50); continue; }
+            if (!g_OvlVisible) {
+                Sleep(16);
+                const float clear[4] = { 0, 0, 0, 0 };
+                g_pd3dDeviceContext->OMSetRenderTargets(1, &g_pRenderTargetView, nullptr);
+                g_pd3dDeviceContext->ClearRenderTargetView(g_pRenderTargetView, clear);
+                g_pSwapChain->Present(0, 0);
+                continue;
+            }
 
             // ── Update target PID (foreground window's process) ──
             HWND fg = GetForegroundWindow();
