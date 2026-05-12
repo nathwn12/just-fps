@@ -1,203 +1,146 @@
-# justFPS - Lightweight Game Performance Monitor
+# justFPS
 
-A stripped-down FPS overlay for Windows. Shows the stats you actually want while gaming — nothing more.
+A lean FPS overlay for Windows. ETW-powered frame capture, LibreHardwareMonitor hardware polling, ImGui overlay rendering. One exe, no services, no telemetry.
 
-![Size](https://img.shields.io/badge/size-~6MB-brightgreen) ![Platform](https://img.shields.io/badge/platform-Windows-blue) ![License](https://img.shields.io/badge/license-GNU%20GPLv3-green) ![Status](https://img.shields.io/badge/status-beta-orange)
+```
+justFPS.exe
+├── ETW trace session    → Present event stream (D3D9-12, OpenGL, Vulkan)
+├── LHWM poller          → GPU/CPU sensors (NVIDIA, AMD, Intel)
+├── Win32 layered window → Transparent click-through overlay
+└── config.ini           → Auto-created, persists everything
+```
 
-> **⚠️ Beta Software:** Still being actively worked on. Things may change. Bug reports and feedback appreciated.
-
-> [!CAUTION]
-> #### Fullscreen doesn't work with overlays
-> Games must be set to **Borderless** or **Borderless Windowed** for the overlay to appear on top. True fullscreen grabs the display exclusively — no overlay can render over it.
-
-## Features
-
-- **FPS** — Real framerate from Windows ETW (works with D3D9-12, OpenGL, Vulkan)
-- **GPU** — Utilization, temperature, and hotspot readings (NVIDIA, AMD, Intel via LibreHardwareMonitor)
-- **Multi-GPU** — Detects all adapters, pick which one to watch
-- **CPU** — Utilization and temperature
-- **Active Process** — Shows what game or app is being tracked
-- **Horizontal or Vertical Layout** — Pick your orientation
-- **Temperature Units** — Celsius or Fahrenheit
-- **Custom Hotkeys** — Toggle and settings keys with Ctrl/Alt/Shift modifiers
-- **Auto-start Overlay** — Skips config and launches overlay immediately
-- **System Tray** — Lives quietly in the background
-- **Preset Positions** — Snap to top/bottom left, center, or right
-- **Persistent Settings** — Everything saves to config.ini automatically
-- **Click-through** — Never steals input from your game
-- **Lightweight** — No installer, no services, no junk
-
-## Screenshot
-
-![justFPS Screenshot](screenshot.png)
-
-## Why I Built This
-
-All I wanted was a simple FPS counter on screen. That turned into an afternoon of uninstalling bloated tools that do way more than I need.
-
-### What I tried and why I gave up:
-
-| Tool | Why I Ditched It |
-|------|------------------|
-| **AMD Adrenalin** | Ctrl+/ brings up the overlay, which is great when it works. Problem is it barely works. GPU temp freezes mid-game, CPU usage vanishes for no reason, and half the time the overlay just doesn't appear. All that on top of a suite I never asked for — instant replay, livestreaming, driver-level settings optimizer, and a dozen other features bloating the tray. I don't need a gaming command center, I need a number that stays on screen. |
-| **Xbox Game Bar** | Uninstalled it years ago for performance reasons. Windows now refuses to reinstall it. Go figure. |
-| **NVIDIA GeForce Experience / Shadowplay / NVIDIA App** | I want an FPS counter, not a full "gaming platform" that optimizes titles, records clips, and runs three background services. |
-| **MSI Afterburner** | Great tool, but it ships with overclocking, fan curves, voltage control, and hardware graphs. I just need a number in the corner of my screen. |
-| **NZXT CAM** | Bundled with my AIO. Turned into tray bloat that phones home and tries to "enhance my experience." |
-| **Steam Overlay** | Decent, but barely any of my library is on Steam. |
-| **Overwolf** | I still can't explain what it does. It just slows things down and serves ads. |
-| **RivaTuner** | The OG. Respect. But in 2026 I don't need 90% of its feature set. |
-| **Fraps** | Last updated in 2013. That says it all. |
-
-### So I built my own:
-
-- **~6MB exe** — One exe, no installers, no background services
-- **C++20 + DirectX 11 + Dear ImGui** — About as lean as it gets
-- **No accounts, no telemetry, no optimization suites, no social features, no ads — just stats.**
-
-## Download
-
-Grab the latest from the [Releases](../../releases) page, or build from source (see below).
-
-## Usage
-
-1. **Run as Administrator** (needed for ETW game FPS capture)
-2. Pick which stats to show
-3. Choose position, layout, and hotkeys
-4. Hit **Start Overlay**
-5. Play your game
-
-### Controls
-
-| Action | How |
-|--------|-----|
-| Right-click menu | Hold **CTRL** + right-click over the overlay |
-| Toggle visibility | Your hotkey (default: **`F12`**) |
-| Toggle settings | Your hotkey (default: **unset** — set one to enable) |
-
-> **Note:** CTRL only works while the mouse is over the overlay, so it won't interfere with other apps.
-
-## Why ETW? Why Admin?
-
-Three ways to capture game FPS:
-
-| Method | How it works | Downsides |
-|--------|--------------|-----------|
-| **DLL Injection** (RivaTuner/Afterburner) | Hooks the game's graphics calls | Can trigger anti-cheat or crash games |
-| **Vendor Hooks** (NVIDIA/AMD overlays) | Built into the driver | Ships with gigabytes of bloat |
-| **ETW** (Windows Event Tracing) | Kernel-level event provider fires on every frame presentation | Requires administrator rights |
-
-**ETW** wins because:
-
-- **Anti-cheat safe** — never touches the game process
-- **Universal** — works across D3D9-12, OpenGL, and Vulkan
-- **No injection** — nothing is loaded into the game
-
-Admin is required because ETW is a kernel tracing API. Windows restricts cross-process event access to elevated processes by design. PresentMon and CapFrameX have the same requirement — it's a platform limitation, not a choice.
-
-### Graphics API Compatibility
-
-| API | Supported |
-|-----|-----------|
-| DirectX 12 | ✅ Yes |
-| DirectX 11 | ✅ Yes |
-| DirectX 10/10.1 | ✅ Yes |
-| DirectX 9 | ✅ Yes (via D3D9 ETW provider) |
-| OpenGL | ✅ Yes (via DxgKrnl ETW provider) |
-| Vulkan | ✅ Yes (via DxgKrnl ETW provider) |
-
-## Building from Source
-
-### Requirements
+## Requirements
 
 - Windows 10 or 11
-- Visual Studio 2022+ Build Tools (C++ workload)
+- Run as **Administrator** (ETW kernel tracing requires elevation)
+- Game set to **Borderless** or **Borderless Windowed** (true fullscreen blocks overlays)
 
-### Build
+## Quick start
 
 ```bash
 git clone https://github.com/nathwn12/just-fps.git
 cd just-fps
 build-msvc.bat
+.\build\justFPS.exe
 ```
 
-Output lands in `build\justFPS.exe` plus required DLLs.
+Default toggle: **F12**. Hold **CTRL** + right-click over the overlay for the context menu.
 
-### Bundled Dependencies
+## Overlay presets
 
-- [Dear ImGui](https://github.com/ocornut/imgui) — Immediate-mode GUI
-- [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) — Cross-vendor hardware monitoring
-- [lhwm-cpp-wrapper](https://gitlab.com/OpenRGBDevelopers/lhwm-wrapper) — C++ bindings for LibreHardwareMonitor
-- DirectX 11 SDK (via Windows SDK)
+Pick a preset or go fully custom:
 
-## Project Structure
+| Preset | Stats displayed |
+|--------|----------------|
+| **JustFPS** | Framerate only |
+| **FpsDetails** | FPS + 1% / 0.1% lows |
+| **FpsDetailsCpuGpuUtil** | FPS, lows, CPU util, GPU util |
+| **FpsCpuGpuRamFullDetails** | Everything — CPU/GPU util, temp, freq, power, fan, VRAM, RAM |
+| **Custom** | You pick exactly what shows |
+
+Per-stat granularity: CPU util, CPU temp, CPU frequency, GPU util, GPU temp, GPU hotspot, GPU power, GPU fan, GPU frequency, VRAM, RAM, and FPS min/max — all toggleable independently.
+
+## Position presets
+
+Six snap positions: top-left, top-center, top-right, bottom-left, bottom-center, bottom-right. Horizontal single-line layout.
+
+## Controls
+
+| Action | How |
+|--------|-----|
+| Toggle overlay | **F12** (configurable) |
+| Open settings | Configurable hotkey (unset by default) |
+| Context menu | Hold **CTRL** + right-click over overlay |
+| Temperature unit | Switch between °C and °F in settings |
+
+All hotkeys support Ctrl/Alt/Shift modifiers.
+
+## Auto-start
+
+Enable auto-start in settings to skip the config window and launch the overlay immediately on next run. Lives in the system tray — double-click to reopen settings.
+
+## Why this exists
+
+Existing FPS tools ship with driver suites, recording platforms, OC utilities, accounts, and ads. This one ships with an FPS counter.
+
+- **~6MB** single exe — one file, no installer
+- **No background services**, no startup entries, no resident processes
+- **Zero telemetry, zero accounts, zero ads, zero social features**
+- **Anti-cheat safe** — ETW never touches the game process (no injection, no hooks)
+
+### What I tried and moved on from
+
+AMD Adrenalin (bloated, overlay unreliable), Xbox Game Bar (wouldn't reinstall), NVIDIA App (three background services for a counter), MSI Afterburner (great tool, ships everything but the kitchen sink), NZXT CAM (telemetry + bloat), Steam Overlay (decent, but library isn't on Steam), Overwolf (ads), RivaTuner (the OG, but 90% features unused).
+
+## Graphics API support
+
+| API | Works |
+|-----|-------|
+| DirectX 12 | ✅ |
+| DirectX 11 | ✅ |
+| DirectX 10/10.1 | ✅ |
+| DirectX 9 | ✅ (via D3D9 ETW provider) |
+| OpenGL | ✅ (via DxgKrnl ETW provider) |
+| Vulkan | ✅ (via DxgKrnl ETW provider) |
+
+## Building from source
+
+### Requirements
+
+- Windows 10 or 11
+- Visual Studio 2022 Build Tools (Desktop development with C++ workload)
+
+### Build
+
+```bash
+# In a Visual Studio Developer Command Prompt:
+build-msvc.bat
+```
+
+Output lands in `build\justFPS.exe` with `lhwm-wrapper.dll` alongside it. `config.ini` is auto-created on first run.
+
+### Project layout
 
 ```
 just-fps/
 ├── src/
-│   ├── main.cpp        # Everything lives here
-│   └── resource.rc     # Version info and icon
-├── dependencies/       # Gitignored — upstream source + update guide
+│   ├── main.cpp          # ~3K lines, everything in one file
+│   └── resource.rc       # Version info + icon
 ├── libs/
-│   ├── imgui/          # Dear ImGui source
-│   └── lhwm/           # LHWM wrapper (single merged DLL, header, lib)
-├── build/              # Build artifacts
-│   ├── justFPS.exe
-│   ├── lhwm-wrapper.dll # Self-contained (all managed deps merged)
-│   └── config.ini      # Auto-created on first run
+│   ├── imgui/            # Dear ImGui (compiled directly via vcxproj)
+│   └── lhwm/             # LHWM wrapper DLL + header + lib
+├── build/                # Build output
 ├── icon.ico
-├── screenshot.png
-├── LICENSE.txt
 ├── build-msvc.bat
 ├── justFPS.sln
 ├── justFPS.vcxproj
 └── README.md
 ```
 
-## Tech Stack
+## Stack
 
-- **Language:** C++20
-- **Build:** MSVC (VS 2022 Build Tools)
-- **Rendering:** DirectX 11
-- **UI:** Dear ImGui
-- **FPS Source:** Windows ETW (D3D9, DXGI, DxgKrnl providers)
-- **Hardware Stats:** LibreHardwareMonitor (NVIDIA, AMD, Intel)
-- **CPU Temp:** LibreHardwareMonitor with WMI fallback
-- **Windowing:** Win32 layered transparent window
-
+| Layer | Choice |
+|-------|--------|
+| Language | C++20 |
+| Build | MSVC v143 (VS 2022) |
+| Render | DirectX 11 |
+| UI | Dear ImGui |
+| FPS source | Windows ETW (D3D9, DXGI, DxgKrnl providers) |
+| Hardware | LibreHardwareMonitor via lhwm-wrapper (NVIDIA, AMD, Intel) |
+| CPU temp fallback | WMI |
+| Window | Win32 layered transparent (WS_EX_LAYERED, WS_EX_TRANSPARENT) |
+| Security | DLL load hardening, PawnIO hash verification, PID-scoped ETW sessions |
 
 ## License
 
 GNU General Public License v3.0 — see [LICENSE.txt](LICENSE.txt).
 
-### Attribution
+### Original work
 
-This project is a **derivative work** based on [fps-overlay](https://github.com/aneeskhan47/fps-overlay) by [aneeskhan47](https://github.com/aneeskhan47). The original project is also licensed under GPLv3.
+This project is a derivative of **fps-overlay** by [aneeskhan47](https://github.com/aneeskhan47), available at [github.com/aneeskhan47/fps-overlay](https://github.com/aneeskhan47/fps-overlay). Both the original and this derivative are licensed under GPLv3.
 
-### Modifications
-
-The following changes have been made relative to the original [fps-overlay](https://github.com/aneeskhan47/fps-overlay) (v1.5.0-beta). All original features (FPS, CPU, GPU, VRAM, RAM, frequency monitoring, Steam-style layout, PawnIO driver install, welcome dialog, system tray) are preserved.
-
-| Change | Description |
-|--------|-------------|
-| **Rebranded** | Renamed from *FPS Overlay* to *justFPS*; executable renamed from `overlay.exe` to `justFPS.exe` |
-| **Overlay presets** | Added preset system (`JustFPS`, `FpsDetails`, `FpsDetailsCpuGpuUtil`, `FpsCpuGpuRamFullDetails`, `Custom`) with batch toggling of per-stat display flags |
-| **Granular per-stat flags** | Split combined showCPU/showGPU into individual toggles: CPU util, CPU temp, CPU frequency, GPU util, GPU temp, GPU hotspot, GPU power, GPU fan, GPU frequency |
-| **Added GPU stats** | Added GPU hotspot temperature, GPU power draw (watts), GPU fan speed (RPM) — not present in original |
-| **FPS lows/highs** | Added display of minimum and maximum recorded FPS |
-| **Overlay frequency display** | Replaced sparkline-based clock graphs with text-only current/max GHz display |
-| **Config UI** | Redesigned settings window with preset-driven layout and grouped checkboxes |
-| **Hotkey system** | Switched from Insert/End defaults to F12 (toggle) and unset (settings); added modifier key support (Ctrl/Alt/Shift combos); configurable via overlay context menu |
-| **Auto-start** | Added option to skip config and launch overlay immediately |
-| **Position presets** | Replaced 4-corner positions (TL/TR/BL/BR) with 6 named snaps (top-left, top-center, top-right, bottom-left, bottom-center, bottom-right) |
-| **Overlay mode state machine** | Added `MODE_CONFIG` / `MODE_OVERLAY` state machine with `g_Pending` command queue for clean mode switching |
-| **Backward compatibility** | Added `SyncLegacyDisplayFlags()` for seamless migration from old coarse showCPU/showGPU config |
-| **Build config** | Renamed solution and project files (`FPSOverlay.sln/vcxproj` → `justFPS.sln/vcxproj`); updated resource metadata |
-| **Dropped dependency** | Removed `imgui_internal.h` include |
-
-## Contributing
-
-Bug reports, feature requests, and PRs welcome.
+Substantive modifications include: rebranding to justFPS with renamed executable, five overlay presets with batch per-stat toggling, granular display flags replacing coarse showCPU/showGPU, addition of GPU hotspot/power/fan speed monitoring, FPS min/max display, text-only frequency display (removed sparkline graphs), redesigned config UI with preset chips and card-based layout, hotkey modifier support (Ctrl/Alt/Shift), six position presets (was four corners), configurable settings key with default unset, auto-start option, `MODE_CONFIG`/`MODE_OVERLAY` state machine with command queue, backward-compatible `SyncLegacyDisplayFlags()` migration, renamed solution/project files, and removal of `imgui_internal.h` dependency.
 
 ---
 

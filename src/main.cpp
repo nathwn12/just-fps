@@ -73,7 +73,7 @@
 #define IDM_UPDATE    1005
 
 // Current version
-#define APP_VERSION "v2.2.1"
+#define APP_VERSION "v2.2.2"
 
 // PawnIO installer resource ID (embedded executable)
 #define IDR_PAWNIO_SETUP 101
@@ -119,7 +119,12 @@ static const USHORT DXGKRNL_EVENT_PRESENT_INFO = 0x00B8;  // Present::Info (184)
 static const USHORT DXGKRNL_EVENT_FLIP_INFO    = 0x00A8;  // Flip::Info (168)
 static const USHORT DXGKRNL_EVENT_BLIT_INFO    = 0x00A6;  // Blit::Info (166)
 
-static const char* ETW_SESSION_NAME = "justFPS_ETW";
+static const char* GetEtwSessionName() {
+    static char name[64] = "";
+    if (name[0] == '\0')
+        snprintf(name, sizeof(name), "justFPS_ETW_%lu", GetCurrentProcessId());
+    return name;
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Configuration
@@ -154,6 +159,7 @@ struct OverlayConfig {
     float edgePadding = 16.0f; // distance from screen edge (px base, scaled by uiScale)
     float uiScale = 1.0f;     // overlay UI scale (1.0 = default)
     float textSaturation = 1.0f; // overlay text saturation/contrast
+    float hudBgAlpha = 0.0f;     // HUD pill background opacity (0=off, 1=full)
     int  toggleKey    = VK_F12;
     int  settingsKey  = 0;
     int  toggleMod    = 0;   // modifier flags for toggle key
@@ -458,6 +464,7 @@ static void LoadConfig(OverlayConfig& cfg)
     cfg.edgePadding   = ReadIniFloat("Layout", "edgePadding", 16.0f);
     cfg.uiScale       = ReadIniFloat("Layout", "uiScale", 1.0f);
     cfg.textSaturation = ReadIniFloat("Layout", "textSaturation", 1.0f);
+    cfg.hudBgAlpha     = ReadIniFloat("Layout", "hudBgAlpha", 0.0f);
 
     // Hotkeys
     cfg.toggleKey     = ReadIniInt("Hotkeys", "toggleKey", VK_F12);
@@ -474,6 +481,8 @@ static void LoadConfig(OverlayConfig& cfg)
     if (cfg.uiScale > 2.25f) cfg.uiScale = 2.25f;
     if (cfg.textSaturation < 0.00f) cfg.textSaturation = 0.00f;
     if (cfg.textSaturation > 1.40f) cfg.textSaturation = 1.40f;
+    if (cfg.hudBgAlpha < 0.00f) cfg.hudBgAlpha = 0.00f;
+    if (cfg.hudBgAlpha > 1.00f) cfg.hudBgAlpha = 1.00f;
     if (cfg.selectedGpu < 0) cfg.selectedGpu = 0;
 
     SyncLegacyDisplayFlags(cfg);
@@ -546,6 +555,7 @@ static void SaveConfig(const OverlayConfig& cfg)
     WriteIniFloat("Layout", "edgePadding", cfg.edgePadding);
     WriteIniFloat("Layout", "uiScale", cfg.uiScale);
     WriteIniFloat("Layout", "textSaturation", cfg.textSaturation);
+    WriteIniFloat("Layout", "hudBgAlpha", cfg.hudBgAlpha);
 
     // Hotkeys
     WriteIniInt("Hotkeys", "toggleKey", cfg.toggleKey);
@@ -666,13 +676,36 @@ static void CheckForUpdatesAsync()
             return;
         }
 
+        // Validate HTTP response
+        DWORD statusCode = 0;
+        DWORD statusSize = sizeof(statusCode);
+        if (!WinHttpQueryHeaders(hRequest,
+                WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &statusSize,
+                WINHTTP_NO_HEADER_INDEX)) {
+            WinHttpCloseHandle(hRequest);
+            WinHttpCloseHandle(hConnect);
+            WinHttpCloseHandle(hSession);
+            g_updateCheckDone = true;
+            return;
+        }
+        if (statusCode != 200) {
+            WinHttpCloseHandle(hRequest);
+            WinHttpCloseHandle(hConnect);
+            WinHttpCloseHandle(hSession);
+            g_updateCheckDone = true;
+            return;
+        }
+
         // Read response
         std::string response;
         DWORD bytesRead = 0;
         char buffer[4096];
-        while (WinHttpReadData(hRequest, buffer, sizeof(buffer) - 1, &bytesRead) && bytesRead > 0) {
+        const size_t kMaxResponse = 65536;
+        while (response.size() < kMaxResponse &&
+               WinHttpReadData(hRequest, buffer, sizeof(buffer) - 1, &bytesRead) && bytesRead > 0) {
             buffer[bytesRead] = '\0';
-            response += buffer;
+            response.append(buffer, bytesRead);
         }
 
         WinHttpCloseHandle(hRequest);
@@ -691,8 +724,18 @@ static void CheckForUpdatesAsync()
                     std::string latestTag = response.substr(start + 1, end - start - 1);
                     snprintf(g_latestVersion, sizeof(g_latestVersion), "%s", latestTag.c_str());
                     
-                    // Compare versions (simple string comparison)
-                    if (strcmp(g_latestVersion, APP_VERSION) != 0) {
+                    // Basic semver validation
+                    bool validFormat = (latestTag.size() >= 5 && latestTag[0] == 'v');
+                    if (validFormat) {
+                        for (size_t i = 1; i < latestTag.size(); i++) {
+                            char c = latestTag[i];
+                            if (!(c == '.' || (c >= '0' && c <= '9'))) {
+                                validFormat = false;
+                                break;
+                            }
+                        }
+                    }
+                    if (validFormat && strcmp(g_latestVersion, APP_VERSION) != 0) {
                         g_updateAvailable = true;
                     }
                 }
@@ -724,6 +767,7 @@ static TRACEHANDLE      g_etwTrace   = 0;
 static std::thread      g_etwThread;
 static std::atomic<bool>  g_etwThreadStarted{false};
 static std::atomic<bool>  g_etwRunning{false};
+static std::thread      g_etwStartupThread;
 static std::atomic<float> g_gameFps{0.0f};
 static float g_fpsLow = 0.0f;
 static float g_fpsHigh = 0.0f;
@@ -741,6 +785,7 @@ static bool  g_cpuTempAvailable = false;
 
 // ── LibreHardwareMonitor (LHWM) state ──
 static std::atomic<bool> g_lhwmAvailable{false};
+static std::thread      g_lhwmInitThread;
 static std::string g_lhwmCpuTempPath;      // e.g., "/amdcpu/0/temperature/3"
 static std::string g_lhwmGpuTempPath;      // e.g., "/gpu-nvidia/0/temperature/0"
 static std::string g_lhwmGpuHotspotPath;   // GPU hotspot temperature, if available
@@ -1114,65 +1159,109 @@ static bool ExtractAndRunPawnIOSetup()
 {
     HMODULE hModule = GetModuleHandle(nullptr);
     HRSRC hResource = FindResource(hModule, MAKEINTRESOURCE(IDR_PAWNIO_SETUP), RT_RCDATA);
-    if (!hResource) {
-        return false;
-    }
-    
+    if (!hResource) return false;
+
     HGLOBAL hLoadedResource = LoadResource(hModule, hResource);
-    if (!hLoadedResource) {
-        return false;
-    }
-    
+    if (!hLoadedResource) return false;
+
     LPVOID pResourceData = LockResource(hLoadedResource);
     DWORD dwResourceSize = SizeofResource(hModule, hResource);
-    if (!pResourceData || dwResourceSize == 0) {
-        return false;
-    }
-    
-    // Get temp directory and create path for the installer
+    if (!pResourceData || dwResourceSize == 0) return false;
+
+    // Create unique temp directory to prevent race attacks
     char tempPath[MAX_PATH];
-    char tempFile[MAX_PATH];
     GetTempPathA(MAX_PATH, tempPath);
-    snprintf(tempFile, MAX_PATH, "%sPawnIO_setup.exe", tempPath);
-    
-    // Write the resource to a temp file
-    HANDLE hFile = CreateFileA(tempFile, GENERIC_WRITE, 0, nullptr, 
-                               CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+
+    char tempDir[MAX_PATH];
+    snprintf(tempDir, MAX_PATH, "%sjustFPS_%08X", tempPath, GetCurrentProcessId());
+    CreateDirectoryA(tempDir, nullptr);
+
+    char tempFile[MAX_PATH];
+    snprintf(tempFile, MAX_PATH, "%s\\PawnIO_setup.exe", tempDir);
+
+    // Exclusive creation — fail if file already exists (race prevention)
+    HANDLE hFile = CreateFileA(tempFile, GENERIC_WRITE, 0, nullptr,
+                               CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (hFile == INVALID_HANDLE_VALUE) {
+        RemoveDirectoryA(tempDir);
         return false;
     }
-    
+
     DWORD bytesWritten;
     BOOL writeResult = WriteFile(hFile, pResourceData, dwResourceSize, &bytesWritten, nullptr);
     CloseHandle(hFile);
-    
+
     if (!writeResult || bytesWritten != dwResourceSize) {
         DeleteFileA(tempFile);
+        RemoveDirectoryA(tempDir);
         return false;
     }
-    
-    // Run the installer silently with -install flag and wait for it to complete
+
+    // Verify hash before executing
+    HCRYPTPROV hProv = 0;
+    HCRYPTHASH hHash = 0;
+    BYTE hashDigest[32];
+    DWORD hashLen = sizeof(hashDigest);
+
+    if (!CryptAcquireContextA(&hProv, nullptr, nullptr, PROV_RSA_AES, CRYPT_VERIFYCONTEXT) ||
+        !CryptCreateHash(hProv, CALG_SHA_256, 0, 0, &hHash)) {
+        if (hProv) CryptReleaseContext(hProv, 0);
+        DeleteFileA(tempFile);
+        RemoveDirectoryA(tempDir);
+        return false;
+    }
+
+    // Re-read the file to hash it
+    HANDLE hReadFile = CreateFileA(tempFile, GENERIC_READ, FILE_SHARE_READ, nullptr,
+                                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hReadFile != INVALID_HANDLE_VALUE) {
+        BYTE readBuf[8192];
+        DWORD readBytes;
+        while (ReadFile(hReadFile, readBuf, sizeof(readBuf), &readBytes, nullptr) && readBytes > 0) {
+            CryptHashData(hHash, readBuf, readBytes, 0);
+        }
+        CloseHandle(hReadFile);
+    }
+
+    DWORD digestLen = sizeof(hashDigest);
+    CryptGetHashParam(hHash, HP_HASHVAL, hashDigest, &digestLen, 0);
+    CryptDestroyHash(hHash);
+    CryptReleaseContext(hProv, 0);
+
+    // Pre-computed SHA-256 of PawnIO_setup.exe
+    const BYTE kExpectedHash[32] = {
+        0x3A, 0x34, 0xB5, 0xDF, 0x23, 0x1F, 0x10, 0xF2,
+        0x52, 0xC4, 0xB5, 0x0D, 0x3C, 0x77, 0x75, 0x34,
+        0xB2, 0xA2, 0xCE, 0xC5, 0xE1, 0xDF, 0x94, 0x66,
+        0xAB, 0x2D, 0xCA, 0x40, 0x1C, 0x06, 0x8C, 0x44
+    };
+
+    if (memcmp(hashDigest, kExpectedHash, 32) != 0) {
+        DeleteFileA(tempFile);
+        RemoveDirectoryA(tempDir);
+        return false;  // Hash mismatch — refuse to execute
+    }
+
+    // Run the installer silently with -install flag
     SHELLEXECUTEINFOA sei = { sizeof(sei) };
-    sei.lpVerb = "runas";  // Request elevation
+    sei.lpVerb = "runas";
     sei.lpFile = tempFile;
-    sei.lpParameters = "-install";  // Silent install flag
-    sei.nShow = SW_HIDE;  // Hide the installer window
+    sei.lpParameters = "-install";
+    sei.nShow = SW_HIDE;
     sei.fMask = SEE_MASK_NOCLOSEPROCESS;
-    
+
+    bool success = false;
     if (ShellExecuteExA(&sei)) {
-        // Wait for the installer to finish
         if (sei.hProcess) {
             WaitForSingleObject(sei.hProcess, INFINITE);
             CloseHandle(sei.hProcess);
         }
-        
-        // Clean up temp file
-        DeleteFileA(tempFile);
-        return true;
+        success = true;
     }
-    
+
     DeleteFileA(tempFile);
-    return false;
+    RemoveDirectoryA(tempDir);
+    return success;
 }
 
 // Show prompt to install PawnIO driver
@@ -1615,7 +1704,7 @@ static bool StartEtwSession()
     ZeroMemory(&buf, sizeof(buf));
     buf.p.Wnode.BufferSize   = sizeof(buf);
     buf.p.LoggerNameOffset   = offsetof(decltype(buf), name);
-    ControlTraceA(0, ETW_SESSION_NAME, &buf.p, EVENT_TRACE_CONTROL_STOP);
+    ControlTraceA(0, GetEtwSessionName(), &buf.p, EVENT_TRACE_CONTROL_STOP);
 
     // Prepare fresh properties
     ZeroMemory(&buf, sizeof(buf));
@@ -1625,7 +1714,7 @@ static bool StartEtwSession()
     buf.p.LogFileMode         = EVENT_TRACE_REAL_TIME_MODE;
     buf.p.LoggerNameOffset    = offsetof(decltype(buf), name);
 
-    ULONG rc = StartTraceA(&g_etwSession, ETW_SESSION_NAME, &buf.p);
+    ULONG rc = StartTraceA(&g_etwSession, GetEtwSessionName(), &buf.p);
     if (rc != ERROR_SUCCESS) return false;
 
     // Enable DXGI provider for DirectX 10/11/12 Present events
@@ -1660,7 +1749,7 @@ static bool StartEtwSession()
     }
 
     EVENT_TRACE_LOGFILEA logFile = {};
-    logFile.LoggerName          = const_cast<LPSTR>(ETW_SESSION_NAME);
+    logFile.LoggerName          = const_cast<LPSTR>(GetEtwSessionName());
     logFile.ProcessTraceMode    = PROCESS_TRACE_MODE_REAL_TIME | PROCESS_TRACE_MODE_EVENT_RECORD;
     logFile.EventRecordCallback = EtwCallback;
 
@@ -1693,15 +1782,26 @@ static void StopEtwSession()
         CloseTrace(g_etwTrace);
         g_etwTrace = 0;
     }
+
+    // Join the startup thread if still running
+    if (g_etwStartupThread.joinable()) {
+        g_etwStartupThread.join();
+    }
+
+    // Join the ETW processing thread
     if (g_etwThreadStarted.load()) {
         if (g_etwThread.joinable()) {
-            auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
-            while (g_etwThread.joinable()) {
-                if (std::chrono::steady_clock::now() >= deadline) {
-                    g_etwThread.detach();
-                    break;
-                }
+            // ProcessTrace may block; use a bounded wait
+            auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+            while (g_etwThread.joinable() && std::chrono::steady_clock::now() < deadline) {
                 Sleep(1);
+            }
+            if (g_etwThread.joinable()) {
+                // ProcessTrace didn't unblock — force-terminate by closing trace handle
+                // The thread will eventually wake up; just detach at this point
+                g_etwThread.detach();
+            } else {
+                g_etwThread.join();
             }
         }
     }
@@ -1710,7 +1810,7 @@ static void StopEtwSession()
     ZeroMemory(&buf, sizeof(buf));
     buf.p.Wnode.BufferSize = sizeof(buf);
     buf.p.LoggerNameOffset = offsetof(decltype(buf), name);
-    ControlTraceA(g_etwSession, ETW_SESSION_NAME, &buf.p, EVENT_TRACE_CONTROL_STOP);
+    ControlTraceA(g_etwSession, GetEtwSessionName(), &buf.p, EVENT_TRACE_CONTROL_STOP);
     g_etwSession = 0;
 
     g_gameFps.store(0.0f);
@@ -1797,6 +1897,52 @@ void ApplyStyle()
     c[ImGuiCol_ButtonActive]     = ImVec4(0.28f,0.28f,0.34f,1);
     c[ImGuiCol_Separator]        = ImVec4(0.22f,0.24f,0.28f,1);
 }
+
+// ── UI helpers for settings deck ──
+static void DrawSectionHeader(const char* label) {
+    ImGui::Spacing();
+    ImGui::TextColored(ImVec4(0.55f, 0.70f, 0.95f, 1), label);
+    ImGui::Spacing();
+}
+
+static void BeginCard() {
+    ImGui::BeginGroup();
+}
+
+static void EndCard() {
+    ImGui::EndGroup();
+    ImGui::Separator();
+    ImGui::Spacing();
+}
+
+// Draws a checkbox toggle that auto-detects Custom preset on change
+static bool DrawStatToggle(const char* label, bool* value, bool showUnavailable = false) {
+    bool changed = ImGui::Checkbox(label, value);
+    if (changed) {
+        extern OverlayConfig g_Config;
+        extern OverlayPreset DetectPreset(const OverlayConfig&);
+        extern void SyncLegacyDisplayFlags(OverlayConfig&);
+        g_Config.preset = DetectPreset(g_Config);
+        SyncLegacyDisplayFlags(g_Config);
+    }
+    if (showUnavailable) {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.9f, 0.4f, 0.2f, 1), "(unavailable)");
+    }
+    return changed;
+}
+
+// Draws a small inline status chip
+static void DrawStatusChip(const char* label, bool available) {
+    ImGui::SameLine();
+    if (available) {
+        ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.4f, 1), "  %s", label);
+    } else {
+        ImGui::TextColored(ImVec4(0.45f, 0.45f, 0.50f, 1), "  %s", label);
+    }
+}
+
+#include <string>
 
 // ═══════════════════════════════════════════════════════════════════════════
 // DX11
@@ -1900,7 +2046,7 @@ void SwitchToOverlay()
     AddTrayIcon();
 
     // Start ETW in background to avoid blocking overlay startup
-    std::thread([]() { g_etwAvailable = StartEtwSession(); }).detach();
+    g_etwStartupThread = std::thread([]() { g_etwAvailable = StartEtwSession(); });
 
     g_Mode       = MODE_OVERLAY;
     g_OvlVisible = true;
@@ -1969,6 +2115,10 @@ static void Present(float r, float g, float b, float a)
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
 {
     g_hInstance = hInst;
+
+    // Harden DLL search path — prevents hijacking from current directory
+    SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_APPLICATION_DIR);
+    SetDllDirectoryA("");
 
     g_singleInstanceMutex = CreateMutexA(nullptr, TRUE, "justFPS.SingleInstance");
     if (!g_singleInstanceMutex || GetLastError() == ERROR_ALREADY_EXISTS) {
@@ -2039,7 +2189,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
     }
     
     // Initialize hardware monitoring asynchronously (don't block startup)
-    std::thread([] {
+    g_lhwmInitThread = std::thread([] {
         bool lhwmOk = InitLHWM();
         if (lhwmOk && !g_lhwmCpuTempPath.empty()) {
             g_cpuTempAvailable = true;
@@ -2051,7 +2201,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
             }
         }
         g_lhwmAvailable.store(lhwmOk, std::memory_order_release);
-    }).detach();
+    });
 
     // Show config window (unless auto-start is enabled)
     if (!g_Config.autoStart) {
@@ -2156,9 +2306,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
             ImGui::Begin("##cfg", nullptr,
                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
-                ImGuiWindowFlags_NoSavedSettings);
+                ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar);
 
-            // ── Title ──
+            // ── Title bar ──
             ImGui::SetWindowFontScale(1.4f);
             ImGui::TextColored(ImVec4(.35f,.78f,1,1), "justFPS");
             ImGui::SetWindowFontScale(1.0f);
@@ -2229,6 +2379,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
                 g_Config.preset = DetectPreset(g_Config);
                 SyncLegacyDisplayFlags(g_Config);
             }
+            if (!g_lhwmAvailable || g_gpuCount == 0) {
+                ImGui::SameLine();
+                ImGui::TextColored(ImVec4(.9f,.4f,.2f,1), "(unavailable)");
+            }
             if (ImGui::Checkbox("  GPU Temperature", &g_Config.showGpuTemp)) {
                 g_Config.preset = DetectPreset(g_Config);
                 SyncLegacyDisplayFlags(g_Config);
@@ -2261,10 +2415,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
                 g_Config.preset = DetectPreset(g_Config);
                 SyncLegacyDisplayFlags(g_Config);
             }
-            // if (ImGui::Checkbox("  Show GPU frequency", &g_Config.showGpuFrequency)) {
-            //     g_Config.preset = DetectPreset(g_Config);
-            //     SyncLegacyDisplayFlags(g_Config);
-            // }
+            if (ImGui::Checkbox("  Show GPU frequency", &g_Config.showGpuFrequency)) {
+                g_Config.preset = DetectPreset(g_Config);
+                SyncLegacyDisplayFlags(g_Config);
+            }
             if (ImGui::Checkbox("  GPU VRAM Usage", &g_Config.showVRAM)) {
                 g_Config.preset = DetectPreset(g_Config);
                 SyncLegacyDisplayFlags(g_Config);
@@ -2284,7 +2438,6 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
                 ImGui::TextColored(ImVec4(.55f,.70f,.95f,1), "GPU SELECTION");
                 ImGui::Spacing();
                 
-                // Build combo preview string
                 const char* previewName = (g_Config.selectedGpu >= 0 && g_Config.selectedGpu < g_gpuCount) 
                     ? g_gpuList[g_Config.selectedGpu].name 
                     : "Select GPU...";
@@ -2338,7 +2491,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
             ImGui::SliderFloat("##edgepad", &g_Config.edgePadding, 0.0f, 100.0f, "%.0f px");
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Distance from the screen edge (0-100 px)");
-            
+            ImGui::TextColored(ImVec4(.45f,.45f,.50f,1), "Background Opacity");
+            ImGui::SetNextItemWidth(-1);
+            float bgPct = g_Config.hudBgAlpha * 100.0f;
+            ImGui::SliderFloat("##hudbg", &bgPct, 0.0f, 100.0f, "%.0f%%");
+            g_Config.hudBgAlpha = bgPct / 100.0f;
+
             // ── TEMPERATURE UNIT ──
             ImGui::Spacing(); ImGui::Spacing();
             ImGui::TextColored(ImVec4(.55f,.70f,.95f,1), "TEMPERATURE");
@@ -2422,6 +2580,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
             ImGui::PopStyleColor(3);
 
             ImGui::End();
+
+            // Config mode pacing: respond to input quickly but don't burn GPU
+            static auto lastCfgFrame = std::chrono::steady_clock::now();
+            auto nowCfg = std::chrono::steady_clock::now();
+            auto cfgElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(nowCfg - lastCfgFrame).count();
+            if (cfgElapsed < 16) {
+                Sleep(16 - (DWORD)cfgElapsed);
+            }
+            lastCfgFrame = std::chrono::steady_clock::now();
+
             Present(0.08f, 0.08f, 0.10f, 1);
         }
 
@@ -2448,11 +2616,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
             }
 
             if (!g_OvlVisible) {
-                Sleep(16);
-                const float clear[4] = { 0, 0, 0, 0 };
-                g_pd3dDeviceContext->OMSetRenderTargets(1, &g_pRenderTargetView, nullptr);
-                g_pd3dDeviceContext->ClearRenderTargetView(g_pRenderTargetView, clear);
-                g_pSwapChain->Present(0, 0);
+                Sleep(100);  // ~10 Hz polling while hidden — no rendering at all
                 continue;
             }
 
@@ -2660,6 +2824,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
             }
 
             ImGui::Begin("##ovl", nullptr, wf);
+
+            // ── Pill/Group background (0% = completely gone) ──
+            if (g_Config.hudBgAlpha > 0.0f) {
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                ImVec2 wMin = ImGui::GetWindowPos();
+                ImVec2 wMax = ImVec2(wMin.x + ImGui::GetWindowSize().x, wMin.y + ImGui::GetWindowSize().y);
+                int alpha = (int)(180.0f * g_Config.hudBgAlpha);
+                ImU32 bgCol = IM_COL32(8, 8, 10, alpha);
+                ImU32 borderCol = IM_COL32(40, 44, 52, (int)(120.0f * g_Config.hudBgAlpha));
+                float radius = 8.0f;
+                dl->AddRectFilled(ImVec2(wMin.x-6, wMin.y-6), ImVec2(wMax.x+6, wMax.y+6), bgCol, radius+2);
+                dl->AddRect(ImVec2(wMin.x-6, wMin.y-6), ImVec2(wMax.x+6, wMax.y+6), borderCol, radius, 0, 1.0f);
+            }
+
             ImGui::SetWindowFontScale(g_Config.uiScale);
 
             // Steam-like colors: muted colored labels, soft gray values.
@@ -2794,11 +2972,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
                                 TextColoredFont(g_overlayValueFont, valCol, "%.1f/%.0fG", dispVramUsed, dispVramTotal);
                             }
                         }
-                        /* // GPU frequency (disabled)
+                        // GPU frequency
                         if (g_Config.showGpuFrequency && g_gpuClockMhz > 0.0f) {
                             ImGui::SameLine(0, 8);
                             DrawFrequency(g_overlayValueFont, valCol, g_gpuClockMhz, g_gpuClockMaxMhz);
-                        } */
+                        }
                         // GPU power
                         if (g_Config.showGpuPower && g_gpuPower > 0.0f) {
                             ImGui::SameLine(0, 8);
@@ -2834,13 +3012,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
             }
 
             if (g_overlaySettingsOpen) {
-                ImGui::SetNextWindowSize(ImVec2(420, 560), ImGuiCond_FirstUseEver);
+                ImGui::SetNextWindowSize(ImVec2(400, 520), ImGuiCond_FirstUseEver);
                 if (g_overlaySettingsJustOpened) {
                     ImGuiViewport* vp = ImGui::GetMainViewport();
                     ImGui::SetNextWindowPos(vp->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
                     g_overlaySettingsJustOpened = false;
                 }
-                if (ImGui::Begin("Settings", &g_overlaySettingsOpen, ImGuiWindowFlags_NoCollapse)) {
+                if (ImGui::Begin("Settings", &g_overlaySettingsOpen, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar)) {
+                    // ── Overlay settings title ──
                     ImGui::TextColored(ImVec4(.35f,.78f,1,1), "justFPS Settings");
                     ImGui::Separator();
 
@@ -2900,10 +3079,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
                         g_Config.preset = DetectPreset(g_Config);
                         SyncLegacyDisplayFlags(g_Config);
                     }
-                    // if (ImGui::Checkbox("Show GPU frequency", &g_Config.showGpuFrequency)) {
-                    //     g_Config.preset = DetectPreset(g_Config);
-                    //     SyncLegacyDisplayFlags(g_Config);
-                    // }
+                    if (ImGui::Checkbox("Show GPU frequency", &g_Config.showGpuFrequency)) {
+                        g_Config.preset = DetectPreset(g_Config);
+                        SyncLegacyDisplayFlags(g_Config);
+                    }
                     if (ImGui::Checkbox("GPU VRAM Usage", &g_Config.showVRAM)) {
                         g_Config.preset = DetectPreset(g_Config);
                         SyncLegacyDisplayFlags(g_Config);
@@ -2954,12 +3133,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
                     ImGui::Text("Edge Padding");
                     ImGui::SetNextItemWidth(-1);
                     ImGui::SliderFloat("##ovl_edgepad", &g_Config.edgePadding, 0.0f, 100.0f, "%.0f px");
+                    ImGui::Text("Background Opacity");
+                    ImGui::SetNextItemWidth(-1);
+                    float ovlBgPct = g_Config.hudBgAlpha * 100.0f;
+                    ImGui::SliderFloat("##ovl_hudbg", &ovlBgPct, 0.0f, 100.0f, "%.0f%%");
+                    g_Config.hudBgAlpha = ovlBgPct / 100.0f;
+
                     ImGui::Spacing();
                     ImGui::TextColored(ImVec4(.55f,.70f,.95f,1), "TEMPERATURE");
-                    int tempUnit = g_Config.useFahrenheit ? 1 : 0;
-                    if (ImGui::RadioButton("Celsius", &tempUnit, 0)) g_Config.useFahrenheit = false;
+                    int ovlTempUnit = g_Config.useFahrenheit ? 1 : 0;
+                    if (ImGui::RadioButton("Celsius", &ovlTempUnit, 0)) g_Config.useFahrenheit = false;
                     ImGui::SameLine(0,24);
-                    if (ImGui::RadioButton("Fahrenheit", &tempUnit, 1)) g_Config.useFahrenheit = true;
+                    if (ImGui::RadioButton("Fahrenheit", &ovlTempUnit, 1)) g_Config.useFahrenheit = true;
 
                     ImGui::Spacing();
                     ImGui::TextColored(ImVec4(.55f,.70f,.95f,1), "HOTKEYS");
@@ -3050,11 +3235,26 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int)
             }
 
             ImGui::End();
+
+            // Frame pacing: overlay doesn't need 60+ FPS
+            static auto lastFrameTime = std::chrono::steady_clock::now();
+            auto nowFr = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(nowFr - lastFrameTime).count();
+            const int targetFps = g_overlaySettingsOpen ? 30 : 15;
+            const int minFrameTime = 1000 / targetFps;
+            if (elapsed < minFrameTime) {
+                Sleep((DWORD)(minFrameTime - elapsed));
+            }
+            lastFrameTime = std::chrono::steady_clock::now();
+
             Present(0, 0, 0, 0);
         }
     }
 
     // ═══ Cleanup ═══
+    // Join worker threads
+    if (g_lhwmInitThread.joinable()) g_lhwmInitThread.join();
+    if (g_etwStartupThread.joinable()) g_etwStartupThread.join();
     SaveConfig(g_Config);  // Save settings before exit
     StopEtwSession();
     if (g_Mode == MODE_OVERLAY) RemoveTrayIcon();

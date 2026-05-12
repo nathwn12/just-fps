@@ -3,6 +3,10 @@ REM justFPS MSVC Build Script
 
 setlocal
 
+REM Default: don't launch after build. Pass --run to launch.
+set "RUN_AFTER="
+if /I "%~1"=="--run" set "RUN_AFTER=1"
+
 REM Change to the directory where this script is located
 pushd "%~dp0"
 
@@ -63,10 +67,14 @@ echo Build successful!
 echo.
 
 echo Copying required DLLs...
-for %%f in ("libs\lhwm\*.dll") do (
-    copy /Y "%%~f" "build\" >nul
-    echo   - %%~nxf copied
+if not exist "libs\lhwm\lhwm-wrapper.dll" (
+    echo ERROR: libs\lhwm\lhwm-wrapper.dll not found!
+    popd
+    endlocal
+    exit /b 1
 )
+copy /Y "libs\lhwm\lhwm-wrapper.dll" "build\" >nul
+echo   - lhwm-wrapper.dll copied
 
 REM Clean up intermediate files
 if exist "build\obj" (
@@ -87,7 +95,9 @@ echo.
 echo Run as Administrator for full functionality.
 echo.
 
-start "" "build\justFPS.exe"
+if defined RUN_AFTER (
+    start "" "build\justFPS.exe"
+)
 
 popd
 endlocal
